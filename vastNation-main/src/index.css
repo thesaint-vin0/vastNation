@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-ink-950 text-ink-50 font-sans antialiased;
+  }
+  ::selection {
+    @apply bg-gold-400 text-ink-950;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-ink-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-ink-700 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gold-600;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+  }
+  .glass-dark {
+    @apply bg-ink-950/70 backdrop-blur-xl border border-white/10;
+  }
+  .btn-gold {
+    @apply bg-gold-400 text-ink-950 font-medium tracking-wide transition-all duration-300 hover:bg-gold-300 hover:shadow-[0_0_30px_rgba(212,175,55,0.4)] active:scale-[0.98];
+  }
+  .btn-outline {
+    @apply border border-white/20 text-white font-medium tracking-wide transition-all duration-300 hover:border-gold-400 hover:text-gold-400 active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply text-ink-300 font-medium tracking-wide transition-all duration-300 hover:text-white;
+  }
+  .input-field {
+    @apply w-full bg-ink-900/60 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-ink-500 focus:outline-none focus:border-gold-400/60 focus:ring-1 focus:ring-gold-400/30 transition-all duration-200;
+  }
+  .section-padding {
+    @apply px-4 sm:px-6 lg:px-12 xl:px-20;
+  }
+  .text-gradient-gold {
+    @apply bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500 bg-clip-text text-transparent;
+  }
+  .skeleton {
+    @apply bg-gradient-to-r from-ink-800 via-ink-700 to-ink-800 bg-[length:1000px_100%] animate-shimmer;
+  }
+  .card-hover {
+    @apply transition-all duration-500 hover:shadow-[0_20px_60px_-15px_rgba(212,175,55,0.15)];
+  }
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Swiper overrides */
+.swiper-pagination-bullet {
+  background: rgba(255, 255, 255, 0.4) !important;
+  opacity: 1 !important;
+}
+.swiper-pagination-bullet-active {
+  background: #d4af37 !important;
+}
+.swiper-button-next,
+.swiper-button-prev {
+  color: #d4af37 !important;
+}
