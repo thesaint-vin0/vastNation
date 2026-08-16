@@ -62,6 +62,6 @@ export function calculateDiscount(
 
 export function calculateShipping(subtotal: number, deliveryMethod: string): number {
   if (deliveryMethod === 'express') return 5000;
-  if (subtotal >= 100000) return 0;
+  if (subtotal >= 100) return 0;
   return 2500;
 }

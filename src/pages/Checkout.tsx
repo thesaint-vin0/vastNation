@@ -72,7 +72,7 @@ export default function Checkout() {
   });
 
   function calculateShippingSafe(sub: number): number {
-    return sub >= 100000 ? 0 : 2500;
+    return sub >= 100 ? 0 : 2500;
   }
 
   /*

@@ -194,7 +194,7 @@ export default function Cart() {
               <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">Delivery Method</label>
               <div className="space-y-2">
                 {[
-                  { value: 'standard', label: 'Standard (3-5 days)', price: subtotal >= 100000 ? 0 : 2500 },
+                  { value: 'standard', label: 'Standard (3-5 days)', price: subtotal >= 100 ? 0 : 2500 },
                   { value: 'express', label: 'Express (1-2 days)', price: 5000 },
                 ].map((opt) => (
                   <button
