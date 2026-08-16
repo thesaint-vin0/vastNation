@@ -263,12 +263,37 @@ export async function getAllProfiles(): Promise<Profile[]> {
   return data ?? [];
 }
 
-export async function getAllReviews(): Promise<(Review & { product: Product | null; profile: Profile | null })[]> {
+export async function getAllReviews() {
   const { data, error } = await supabase
     .from('reviews')
-    .select('*, product:products(id, name, slug), profile:profiles(id, email, full_name)')
-    .order('created_at', { ascending: false });
-  if (error) throw error;
+    .select(`
+      id,
+      product_id,
+      user_id,
+      rating,
+      title,
+      comment,
+      created_at,
+      product:products (
+        id,
+        name,
+        slug
+      ),
+      profile:profiles (
+        id,
+        email,
+        full_name
+      )
+    `)
+    .order('created_at', {
+      ascending: false,
+    });
+
+  if (error) {
+    console.error('Failed to load reviews:', error);
+    throw error;
+  }
+
   return data ?? [];
 }
 
@@ -277,9 +302,18 @@ export async function deleteReview(id: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function createProduct(product: Omit<Product, 'id' | 'created_at'>): Promise<void> {
-  const { error } = await supabase.from('products').insert(product);
+export async function createProduct(
+  product: Omit<Product, 'created_at'>,
+): Promise<Product> {
+  const { data, error } = await supabase
+    .from('products')
+    .insert(product)
+    .select()
+    .single();
+
   if (error) throw error;
+
+  return data;
 }
 
 export async function updateProduct(id: string, updates: Partial<Product>): Promise<void> {
@@ -292,7 +326,9 @@ export async function deleteProduct(id: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function createCategory(category: Omit<Category, 'id' | 'created_at'>): Promise<void> {
+export async function createCategory(
+  category: Omit<Category, 'created_at'>
+): Promise<void> {
   const { error } = await supabase.from('categories').insert(category);
   if (error) throw error;
 }

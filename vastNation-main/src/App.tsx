@@ -6,6 +6,7 @@ import { WishlistProvider } from './context/WishlistContext';
 import { ToastProvider } from './context/ToastContext';
 import MainLayout from './layouts/MainLayout';
 import Home from './pages/Home';
+import PaymentCallback from './pages/PaymentCallback';
 
 const Shop = lazy(() => import('./pages/Shop'));
 const ProductDetails = lazy(() => import('./pages/ProductDetails'));
@@ -53,6 +54,10 @@ export default function App() {
                     <Route path="/about" element={<About />} />
                     <Route path="/wishlist" element={<Wishlist />} />
                     <Route path="*" element={<NotFound />} />
+                    <Route
+  path="/payment/callback"
+  element={<PaymentCallback />}
+/>
                   </Route>
                 </Routes>
               </Suspense>
