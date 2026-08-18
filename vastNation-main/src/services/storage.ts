@@ -110,8 +110,3 @@ export async function deleteStorageImage(
   }
 }
 
-const {
-  data: { session },
-} = await supabase.auth.getSession();
-
-console.log('SUPABASE SESSION:', session);
