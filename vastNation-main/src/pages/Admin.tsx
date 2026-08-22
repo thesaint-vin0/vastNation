@@ -28,7 +28,6 @@ import {
   getProducts,
   getCategories,
   getCoupons,
-  createProduct,
   deleteProduct,
   createCategory,
   deleteCategory,
@@ -72,6 +71,20 @@ type Tab =
   | 'reviews'
   | 'coupons';
 
+type OrderStatus =
+  | 'pending'
+  | 'paid'
+  | 'shipped'
+  | 'delivered'
+  | 'cancelled';
+
+type ProductFlag =
+  | 'is_featured'
+  | 'is_new'
+  | 'is_bestseller'
+  | 'is_trending'
+  | 'is_limited';
+
 type AdminReview = Review & {
   product?: {
     id: string;
@@ -84,6 +97,53 @@ type AdminReview = Review & {
     full_name: string | null;
   } | null;
 };
+
+const EMPTY_PRODUCT_FORM = {
+  name: '',
+  description: '',
+  price: '',
+  compare_at_price: '',
+  category_id: '',
+  images: [] as File[],
+  sizes: 'S,M,L,XL',
+  colors: 'Black,White',
+  stock: '10',
+  badge: '',
+  is_featured: false,
+  is_new: false,
+  is_bestseller: false,
+  is_trending: false,
+  is_limited: false,
+};
+
+const EMPTY_CATEGORY_FORM = {
+  name: '',
+  description: '',
+  image: null as File | null,
+};
+
+const EMPTY_COUPON_FORM = {
+  code: '',
+  type: 'percent',
+  value: '',
+  min_order: '0',
+};
+
+const PRODUCT_FLAGS: ProductFlag[] = [
+  'is_featured',
+  'is_new',
+  'is_bestseller',
+  'is_trending',
+  'is_limited',
+];
+
+const ORDER_STATUSES: OrderStatus[] = [
+  'pending',
+  'paid',
+  'shipped',
+  'delivered',
+  'cancelled',
+];
 
 export default function Admin() {
   const { user, profile, loading: authLoading } = useAuth();
@@ -98,58 +158,73 @@ export default function Admin() {
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [reviews, setReviews] = useState<AdminReview[]>([]);
 
-  const [loading, setLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
 
   const [showProductForm, setShowProductForm] = useState(false);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [showCouponForm, setShowCouponForm] = useState(false);
 
-  /*
-   * ============================================================
-   * PRODUCT FORM
-   * ============================================================
-   */
-
   const [productForm, setProductForm] = useState({
-    name: '',
-    description: '',
-    price: '',
-    compare_at_price: '',
-    category_id: '',
-    images: [] as File[],
-    sizes: 'S,M,L,XL',
-    colors: 'Black,White',
-    stock: '10',
-    badge: '',
-    is_featured: false,
-    is_new: false,
-    is_bestseller: false,
-    is_trending: false,
-    is_limited: false,
+    ...EMPTY_PRODUCT_FORM,
   });
 
-  const productImageInputRef = useRef<HTMLInputElement>(null);
+  const [categoryForm, setCategoryForm] = useState({
+    ...EMPTY_CATEGORY_FORM,
+  });
+
+  const [couponForm, setCouponForm] = useState({
+    ...EMPTY_COUPON_FORM,
+  });
+
+  const productImageInputRef =
+    useRef<HTMLInputElement>(null);
+
+  const categoryImageInputRef =
+    useRef<HTMLInputElement>(null);
+
+  /*
+   * ============================================================
+   * PRODUCT IMAGE SELECTION
+   * ============================================================
+   */
 
   const handleProductImages = (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const files = Array.from(e.target.files ?? []);
 
-    if (!files.length) return;
+    if (!files.length) {
+      return;
+    }
 
-    const validFiles = files.filter((file) => {
+    const validFiles: File[] = [];
+
+    for (const file of files) {
       if (file.size > 5 * 1024 * 1024) {
-        toast(`${file.name} is larger than 5MB`, 'error');
-        return false;
+        toast(
+          `${file.name} is larger than 5MB`,
+          'error',
+        );
+        continue;
       }
 
-      return true;
-    });
+      if (!file.type.startsWith('image/')) {
+        toast(
+          `${file.name} is not a valid image`,
+          'error',
+        );
+        continue;
+      }
+
+      validFiles.push(file);
+    }
 
     setProductForm((prev) => ({
       ...prev,
-      images: [...prev.images, ...validFiles].slice(0, 6),
+      images: [
+        ...prev.images,
+        ...validFiles,
+      ].slice(0, 6),
     }));
 
     e.target.value = '';
@@ -157,27 +232,34 @@ export default function Admin() {
 
   /*
    * ============================================================
-   * CATEGORY FORM
+   * CATEGORY IMAGE SELECTION
    * ============================================================
    */
-
-  const [categoryForm, setCategoryForm] = useState({
-    name: '',
-    description: '',
-    image: null as File | null,
-  });
-
-  const categoryImageInputRef = useRef<HTMLInputElement>(null);
 
   const handleCategoryImage = (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = e.target.files?.[0];
 
-    if (!file) return;
+    if (!file) {
+      return;
+    }
 
     if (file.size > 5 * 1024 * 1024) {
-      toast('Category image must be less than 5MB', 'error');
+      toast(
+        'Category image must be less than 5MB',
+        'error',
+      );
+      e.target.value = '';
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      toast(
+        'Please select a valid image',
+        'error',
+      );
+      e.target.value = '';
       return;
     }
 
@@ -188,19 +270,6 @@ export default function Admin() {
 
     e.target.value = '';
   };
-
-  /*
-   * ============================================================
-   * COUPON FORM
-   * ============================================================
-   */
-
-  const [couponForm, setCouponForm] = useState({
-    code: '',
-    type: 'percent',
-    value: '',
-    min_order: '0',
-  });
 
   /*
    * ============================================================
@@ -216,9 +285,17 @@ export default function Admin() {
 
       setProducts(data);
     } catch (error) {
-      console.error('Failed to load products:', error);
+      console.error(
+        'Failed to load products:',
+        error,
+      );
+
+      toast(
+        'Failed to load products',
+        'error',
+      );
     }
-  }, []);
+  }, [toast]);
 
   /*
    * ============================================================
@@ -232,9 +309,17 @@ export default function Admin() {
 
       setCategories(data);
     } catch (error) {
-      console.error('Failed to load categories:', error);
+      console.error(
+        'Failed to load categories:',
+        error,
+      );
+
+      toast(
+        'Failed to load categories',
+        'error',
+      );
     }
-  }, []);
+  }, [toast]);
 
   /*
    * ============================================================
@@ -248,22 +333,30 @@ export default function Admin() {
 
       setCoupons(data);
     } catch (error) {
-      console.error('Failed to load coupons:', error);
+      console.error(
+        'Failed to load coupons:',
+        error,
+      );
+
+      toast(
+        'Failed to load coupons',
+        'error',
+      );
     }
-  }, []);
+  }, [toast]);
 
   /*
    * ============================================================
-   * LOAD ALL ORDERS
-   *
-   * IMPORTANT:
-   * This requires an admin SELECT RLS policy.
+   * LOAD ORDERS
    * ============================================================
    */
 
   const refreshOrders = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      const {
+        data,
+        error,
+      } = await supabase
         .from('orders')
         .select('*')
         .order('created_at', {
@@ -271,28 +364,42 @@ export default function Admin() {
         });
 
       if (error) {
-        console.error('Failed to load orders:', error);
+        console.error(
+          'Failed to load orders:',
+          error,
+        );
+
         throw error;
       }
 
-      console.log('ADMIN ORDERS:', data);
-
-      setOrders((data ?? []) as Order[]);
+      setOrders(
+        (data ?? []) as Order[],
+      );
     } catch (error) {
-      console.error('refreshOrders error:', error);
-      toast('Failed to load orders', 'error');
+      console.error(
+        'refreshOrders error:',
+        error,
+      );
+
+      toast(
+        'Failed to load orders',
+        'error',
+      );
     }
   }, [toast]);
 
   /*
    * ============================================================
-   * LOAD ALL CUSTOMERS
+   * LOAD CUSTOMERS
    * ============================================================
    */
 
   const refreshCustomers = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      const {
+        data,
+        error,
+      } = await supabase
         .from('profiles')
         .select('*')
         .order('created_at', {
@@ -300,26 +407,33 @@ export default function Admin() {
         });
 
       if (error) {
-        console.error('Failed to load customers:', error);
+        console.error(
+          'Failed to load customers:',
+          error,
+        );
+
         throw error;
       }
 
-      console.log('ADMIN CUSTOMERS:', data);
-
-      setCustomers((data ?? []) as Profile[]);
+      setCustomers(
+        (data ?? []) as Profile[],
+      );
     } catch (error) {
-      console.error('refreshCustomers error:', error);
-      toast('Failed to load customers', 'error');
+      console.error(
+        'refreshCustomers error:',
+        error,
+      );
+
+      toast(
+        'Failed to load customers',
+        'error',
+      );
     }
   }, [toast]);
 
   /*
    * ============================================================
-   * LOAD ALL REVIEWS
-   *
-   * We load reviews first, then profiles/products separately.
-   * This avoids relying on a nested relationship that may fail
-   * because of RLS.
+   * LOAD REVIEWS
    * ============================================================
    */
 
@@ -336,38 +450,46 @@ export default function Admin() {
         });
 
       if (reviewError) {
-        console.error('Failed to load reviews:', reviewError);
+        console.error(
+          'Failed to load reviews:',
+          reviewError,
+        );
+
         throw reviewError;
       }
 
       const rawReviews = reviewData ?? [];
 
-      /*
-       * Get product IDs.
-       */
       const productIds = [
         ...new Set(
           rawReviews
-            .map((review: any) => review.product_id)
+            .map(
+              (review) =>
+                review.product_id,
+            )
             .filter(Boolean),
         ),
       ];
 
-      /*
-       * Get user IDs.
-       */
       const userIds = [
         ...new Set(
           rawReviews
-            .map((review: any) => review.user_id)
+            .map(
+              (review) =>
+                review.user_id,
+            )
             .filter(Boolean),
         ),
       ];
 
-      /*
-       * Load products.
-       */
-      let productMap = new Map<string, any>();
+      let productMap = new Map<
+        string,
+        {
+          id: string;
+          name: string;
+          slug: string;
+        }
+      >();
 
       if (productIds.length > 0) {
         const {
@@ -385,18 +507,24 @@ export default function Admin() {
           );
         } else {
           productMap = new Map(
-            (productData ?? []).map((product: any) => [
-              product.id,
-              product,
-            ]),
+            (productData ?? []).map(
+              (product) => [
+                product.id,
+                product,
+              ],
+            ),
           );
         }
       }
 
-      /*
-       * Load profiles.
-       */
-      let profileMap = new Map<string, any>();
+      let profileMap = new Map<
+        string,
+        {
+          id: string;
+          email: string;
+          full_name: string | null;
+        }
+      >();
 
       if (userIds.length > 0) {
         const {
@@ -404,7 +532,9 @@ export default function Admin() {
           error: profileError,
         } = await supabase
           .from('profiles')
-          .select('id,email,full_name')
+          .select(
+            'id,email,full_name',
+          )
           .in('id', userIds);
 
         if (profileError) {
@@ -414,30 +544,40 @@ export default function Admin() {
           );
         } else {
           profileMap = new Map(
-            (profileData ?? []).map((profile: any) => [
-              profile.id,
-              profile,
-            ]),
+            (profileData ?? []).map(
+              (reviewProfile) => [
+                reviewProfile.id,
+                reviewProfile,
+              ],
+            ),
           );
         }
       }
 
-      const formattedReviews: AdminReview[] = rawReviews.map(
-        (review: any) => ({
+      const formattedReviews: AdminReview[] =
+        rawReviews.map((review) => ({
           ...review,
           product:
-            productMap.get(review.product_id) ?? null,
+            productMap.get(
+              review.product_id,
+            ) ?? null,
           profile:
-            profileMap.get(review.user_id) ?? null,
-        }),
-      );
-
-      console.log('ADMIN REVIEWS:', formattedReviews);
+            profileMap.get(
+              review.user_id,
+            ) ?? null,
+        }));
 
       setReviews(formattedReviews);
     } catch (error) {
-      console.error('refreshReviews error:', error);
-      toast('Failed to load reviews', 'error');
+      console.error(
+        'refreshReviews error:',
+        error,
+      );
+
+      toast(
+        'Failed to load reviews',
+        'error',
+      );
     }
   }, [toast]);
 
@@ -448,7 +588,12 @@ export default function Admin() {
    */
 
   const loadAdminData = useCallback(async () => {
-    if (!user || profile?.role !== 'admin') return;
+    if (
+      !user ||
+      profile?.role !== 'admin'
+    ) {
+      return;
+    }
 
     setDataLoading(true);
 
@@ -462,14 +607,16 @@ export default function Admin() {
         refreshCoupons(),
       ]);
     } catch (error) {
-      console.error('Failed to load admin data:', error);
+      console.error(
+        'Failed to load admin data:',
+        error,
+      );
     } finally {
       setDataLoading(false);
-      setLoading(false);
     }
   }, [
     user,
-    profile,
+    profile?.role,
     refreshProducts,
     refreshCategories,
     refreshOrders,
@@ -485,10 +632,19 @@ export default function Admin() {
    */
 
   useEffect(() => {
-    if (!user || profile?.role !== 'admin') return;
+    if (
+      !user ||
+      profile?.role !== 'admin'
+    ) {
+      return;
+    }
 
-    loadAdminData();
-  }, [user, profile, loadAdminData]);
+    void loadAdminData();
+  }, [
+    user,
+    profile?.role,
+    loadAdminData,
+  ]);
 
   /*
    * ============================================================
@@ -517,11 +673,24 @@ export default function Admin() {
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+      />
+    );
   }
 
-  if (profile && profile.role !== 'admin') {
-    return <Navigate to="/dashboard" replace />;
+  if (
+    profile &&
+    profile.role !== 'admin'
+  ) {
+    return (
+      <Navigate
+        to="/dashboard"
+        replace
+      />
+    );
   }
 
   /*
@@ -535,7 +704,82 @@ export default function Admin() {
   ) => {
     e.preventDefault();
 
-    if (!productForm.images.length) {
+    const name =
+      productForm.name.trim();
+
+    const description =
+      productForm.description.trim();
+
+    const price = Number(
+      productForm.price,
+    );
+
+    const stock = Number(
+      productForm.stock,
+    );
+
+    const compareAtPrice =
+      productForm.compare_at_price
+        ? Number(
+            productForm.compare_at_price,
+          )
+        : null;
+
+    if (!name) {
+      toast(
+        'Product name is required',
+        'error',
+      );
+      return;
+    }
+
+    if (!description) {
+      toast(
+        'Product description is required',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      !Number.isFinite(price) ||
+      price < 0
+    ) {
+      toast(
+        'Enter a valid product price',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      compareAtPrice !== null &&
+      (!Number.isFinite(
+        compareAtPrice,
+      ) ||
+        compareAtPrice < 0)
+    ) {
+      toast(
+        'Enter a valid compare-at price',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      !Number.isInteger(stock) ||
+      stock < 0
+    ) {
+      toast(
+        'Enter a valid stock quantity',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      productForm.images.length === 0
+    ) {
       toast(
         'Please select at least one product image',
         'error',
@@ -544,41 +788,56 @@ export default function Admin() {
     }
 
     try {
-      const productId = crypto.randomUUID();
+      const productId =
+        crypto.randomUUID();
 
-      const uploadedImages = await Promise.all(
-        productForm.images.map((file) =>
-          uploadProductImage(file, productId),
-        ),
-      );
+      const uploadedImages =
+        await Promise.all(
+          productForm.images.map(
+            (file) =>
+              uploadProductImage(
+                file,
+                productId,
+              ),
+          ),
+        );
 
-      const { error } = await supabase
+      const {
+        error,
+      } = await supabase
         .from('products')
         .insert({
           id: productId,
-          name: productForm.name,
-          slug: slugify(productForm.name),
-          description: productForm.description,
-          price: Number(productForm.price),
+          name,
+          slug: slugify(name),
+          description,
+          price,
           compare_at_price:
-            productForm.compare_at_price
-              ? Number(productForm.compare_at_price)
-              : null,
+            compareAtPrice,
           category_id:
-            productForm.category_id || null,
+            productForm.category_id ||
+            null,
           images: uploadedImages,
           sizes: productForm.sizes
             .split(',')
-            .map((s) => s.trim())
+            .map((size) =>
+              size.trim(),
+            )
             .filter(Boolean),
           colors: productForm.colors
             .split(',')
-            .map((s) => s.trim())
+            .map((color) =>
+              color.trim(),
+            )
             .filter(Boolean),
-          stock: Number(productForm.stock),
-          badge: productForm.badge || null,
-          is_featured: productForm.is_featured,
-          is_new: productForm.is_new,
+          stock,
+          badge:
+            productForm.badge ||
+            null,
+          is_featured:
+            productForm.is_featured,
+          is_new:
+            productForm.is_new,
           is_bestseller:
             productForm.is_bestseller,
           is_trending:
@@ -593,26 +852,15 @@ export default function Admin() {
         throw error;
       }
 
-      toast('Product created successfully');
+      toast(
+        'Product created successfully',
+      );
 
       setShowProductForm(false);
 
       setProductForm({
-        name: '',
-        description: '',
-        price: '',
-        compare_at_price: '',
-        category_id: '',
+        ...EMPTY_PRODUCT_FORM,
         images: [],
-        sizes: 'S,M,L,XL',
-        colors: 'Black,White',
-        stock: '10',
-        badge: '',
-        is_featured: false,
-        is_new: false,
-        is_bestseller: false,
-        is_trending: false,
-        is_limited: false,
       });
 
       await refreshProducts();
@@ -638,7 +886,13 @@ export default function Admin() {
   const handleDeleteProduct = async (
     product: Product,
   ) => {
-    if (!confirm('Delete this product?')) return;
+    if (
+      !window.confirm(
+        `Delete "${product.name}"?`,
+      )
+    ) {
+      return;
+    }
 
     try {
       if (
@@ -652,18 +906,21 @@ export default function Admin() {
             );
           } catch (error) {
             console.error(
-              'Failed to delete image:',
+              'Failed to delete product image:',
               error,
             );
           }
         }
       }
 
-      await deleteProduct(product.id);
+      await deleteProduct(
+        product.id,
+      );
 
-      setProducts((prev) =>
-        prev.filter(
-          (p) => p.id !== product.id,
+      setProducts((previous) =>
+        previous.filter(
+          (item) =>
+            item.id !== product.id,
         ),
       );
 
@@ -692,6 +949,17 @@ export default function Admin() {
   ) => {
     e.preventDefault();
 
+    const name =
+      categoryForm.name.trim();
+
+    if (!name) {
+      toast(
+        'Category name is required',
+        'error',
+      );
+      return;
+    }
+
     if (!categoryForm.image) {
       toast(
         'Please select a category image',
@@ -712,23 +980,21 @@ export default function Admin() {
 
       await createCategory({
         id: categoryId,
-        name: categoryForm.name,
-        slug: slugify(
-          categoryForm.name,
-        ),
+        name,
+        slug: slugify(name),
         description:
-          categoryForm.description,
+          categoryForm.description.trim(),
         image_url: imageUrl,
       });
 
-      toast('Category created');
+      toast(
+        'Category created successfully',
+      );
 
       setShowCategoryForm(false);
 
       setCategoryForm({
-        name: '',
-        description: '',
-        image: null,
+        ...EMPTY_CATEGORY_FORM,
       });
 
       await refreshCategories();
@@ -754,14 +1020,19 @@ export default function Admin() {
   const handleDeleteCategory = async (
     id: string,
   ) => {
-    if (!confirm('Delete this category?'))
+    if (
+      !window.confirm(
+        'Delete this category?',
+      )
+    ) {
       return;
+    }
 
     try {
       await deleteCategory(id);
 
-      setCategories((prev) =>
-        prev.filter(
+      setCategories((previous) =>
+        previous.filter(
           (category) =>
             category.id !== id,
         ),
@@ -769,7 +1040,10 @@ export default function Admin() {
 
       toast('Category deleted');
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Failed to delete category:',
+        error,
+      );
 
       toast(
         'Failed to delete category',
@@ -789,36 +1063,89 @@ export default function Admin() {
   ) => {
     e.preventDefault();
 
+    const code =
+      couponForm.code
+        .trim()
+        .toUpperCase();
+
+    const value = Number(
+      couponForm.value,
+    );
+
+    const minOrder = Number(
+      couponForm.min_order || 0,
+    );
+
+    if (!code) {
+      toast(
+        'Coupon code is required',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      !Number.isFinite(value) ||
+      value <= 0
+    ) {
+      toast(
+        'Enter a valid coupon value',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      couponForm.type === 'percent' &&
+      value > 100
+    ) {
+      toast(
+        'Percentage discount cannot exceed 100%',
+        'error',
+      );
+      return;
+    }
+
+    if (
+      !Number.isFinite(minOrder) ||
+      minOrder < 0
+    ) {
+      toast(
+        'Enter a valid minimum order amount',
+        'error',
+      );
+      return;
+    }
+
     try {
       await createCoupon({
-        code: couponForm.code.toUpperCase(),
-        type: couponForm.type as
-          | 'percent'
-          | 'fixed',
-        value: Number(
-          couponForm.value,
-        ),
-        min_order: Number(
-          couponForm.min_order,
-        ),
+        code,
+        type:
+          couponForm.type as
+            | 'percent'
+            | 'fixed',
+        value,
+        min_order: minOrder,
         active: true,
         expires_at: null,
       });
 
-      toast('Coupon created');
+      toast(
+        'Coupon created successfully',
+      );
 
       setShowCouponForm(false);
 
       setCouponForm({
-        code: '',
-        type: 'percent',
-        value: '',
-        min_order: '0',
+        ...EMPTY_COUPON_FORM,
       });
 
       await refreshCoupons();
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Failed to create coupon:',
+        error,
+      );
 
       toast(
         'Failed to create coupon',
@@ -836,21 +1163,30 @@ export default function Admin() {
   const handleDeleteCoupon = async (
     id: string,
   ) => {
-    if (!confirm('Delete this coupon?'))
+    if (
+      !window.confirm(
+        'Delete this coupon?',
+      )
+    ) {
       return;
+    }
 
     try {
       await deleteCoupon(id);
 
-      setCoupons((prev) =>
-        prev.filter(
-          (coupon) => coupon.id !== id,
+      setCoupons((previous) =>
+        previous.filter(
+          (coupon) =>
+            coupon.id !== id,
         ),
       );
 
       toast('Coupon deleted');
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Failed to delete coupon:',
+        error,
+      );
 
       toast(
         'Failed to delete coupon',
@@ -861,34 +1197,46 @@ export default function Admin() {
 
   /*
    * ============================================================
-   * UPDATE ORDER
+   * UPDATE ORDER STATUS
    * ============================================================
    */
 
   const handleUpdateOrderStatus = async (
     orderId: string,
-    status: string,
+    status: OrderStatus,
   ) => {
+    const previousOrders =
+      orders;
+
+    setOrders((previous) =>
+      previous.map((order) =>
+        order.id === orderId
+          ? {
+              ...order,
+              status,
+            }
+          : order,
+      ),
+    );
+
     try {
       await updateOrderStatus(
         orderId,
         status,
       );
 
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                status,
-              }
-            : order,
-        ),
+      toast(
+        'Order status updated',
       );
 
-      toast('Order status updated');
+      await refreshOrders();
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Failed to update order status:',
+        error,
+      );
+
+      setOrders(previousOrders);
 
       toast(
         'Failed to update order',
@@ -905,19 +1253,39 @@ export default function Admin() {
 
   const handleToggleFlag = async (
     product: Product,
-    flag: keyof Product,
+    flag: ProductFlag,
   ) => {
     try {
+      const currentValue =
+        Boolean(product[flag]);
+
       await updateProduct(
         product.id,
         {
-          [flag]: !product[flag],
+          [flag]: !currentValue,
         } as Partial<Product>,
       );
 
-      await refreshProducts();
+      setProducts((previous) =>
+        previous.map((item) =>
+          item.id === product.id
+            ? {
+                ...item,
+                [flag]:
+                  !currentValue,
+              }
+            : item,
+        ),
+      );
+
+      toast(
+        'Product updated',
+      );
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Failed to update product:',
+        error,
+      );
 
       toast(
         'Failed to update product',
@@ -935,21 +1303,30 @@ export default function Admin() {
   const handleDeleteReview = async (
     id: string,
   ) => {
-    if (!confirm('Delete this review?'))
+    if (
+      !window.confirm(
+        'Delete this review?',
+      )
+    ) {
       return;
+    }
 
     try {
       await deleteReview(id);
 
-      setReviews((prev) =>
-        prev.filter(
-          (review) => review.id !== id,
+      setReviews((previous) =>
+        previous.filter(
+          (review) =>
+            review.id !== id,
         ),
       );
 
       toast('Review deleted');
     } catch (error) {
-      console.error(error);
+      console.error(
+        'Failed to delete review:',
+        error,
+      );
 
       toast(
         'Failed to delete review',
@@ -964,25 +1341,31 @@ export default function Admin() {
    * ============================================================
    */
 
-  const totalRevenue = orders
-    .filter(
-      (order) =>
-        order.payment_status === 'paid' ||
-        order.status === 'paid' ||
-        order.status === 'delivered',
-    )
-    .reduce(
-      (sum, order) =>
-        sum + Number(order.total || 0),
-      0,
-    );
+  const totalRevenue =
+    orders
+      .filter(
+        (order) =>
+          order.payment_status ===
+            'paid' ||
+          order.status === 'paid' ||
+          order.status ===
+            'delivered',
+      )
+      .reduce(
+        (sum, order) =>
+          sum +
+          Number(order.total || 0),
+        0,
+      );
 
-  const totalOrders = orders.length;
+  const totalOrders =
+    orders.length;
 
   const totalCustomers =
     customers.filter(
       (customer) =>
-        customer.role === 'customer',
+        customer.role ===
+        'customer',
     ).length;
 
   const totalProducts =
@@ -991,7 +1374,8 @@ export default function Admin() {
   const paidOrders =
     orders.filter(
       (order) =>
-        order.payment_status === 'paid' ||
+        order.payment_status ===
+          'paid' ||
         order.status === 'paid',
     ).length;
 
@@ -1010,94 +1394,49 @@ export default function Admin() {
    * ============================================================
    */
 
-  const menuItems = [
+  const menuItems: {
+    id: Tab;
+    label: string;
+    icon: React.ComponentType<{
+      className?: string;
+    }>;
+  }[] = [
     {
-      id: 'dashboard' as Tab,
+      id: 'dashboard',
       label: 'Analytics',
       icon: LayoutDashboard,
     },
     {
-      id: 'products' as Tab,
+      id: 'products',
       label: 'Products',
       icon: Package,
     },
     {
-      id: 'categories' as Tab,
+      id: 'categories',
       label: 'Categories',
       icon: Tag,
     },
     {
-      id: 'orders' as Tab,
+      id: 'orders',
       label: 'Orders',
       icon: ShoppingCart,
     },
     {
-      id: 'customers' as Tab,
+      id: 'customers',
       label: 'Customers',
       icon: Users,
     },
     {
-      id: 'reviews' as Tab,
+      id: 'reviews',
       label: 'Reviews',
       icon: Star,
     },
     {
-      id: 'coupons' as Tab,
+      id: 'coupons',
       label: 'Coupons',
       icon: Ticket,
     },
   ];
-
-  const statusOptions = [
-    'pending',
-    'paid',
-    'shipped',
-    'delivered',
-    'cancelled',
-  ];
-
-  /*
-   * ============================================================
-   * PAYMENT STATUS BADGE
-   * ============================================================
-   */
-
-  const PaymentStatus = ({
-    status,
-  }: {
-    status?: string | null;
-  }) => {
-    const value =
-      status || 'pending';
-
-    if (value === 'paid') {
-      return (
-        <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-green-500/20 text-green-400">
-          <CheckCircle className="w-3 h-3" />
-          Paid
-        </span>
-      );
-    }
-
-    if (
-      value === 'failed' ||
-      value === 'cancelled'
-    ) {
-      return (
-        <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">
-          <XCircle className="w-3 h-3" />
-          {value}
-        </span>
-      );
-    }
-
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-yellow-500/20 text-yellow-400">
-        <Clock className="w-3 h-3" />
-        Pending
-      </span>
-    );
-  };
 
   /*
    * ============================================================
@@ -1109,9 +1448,7 @@ export default function Admin() {
     <div className="section-padding py-8 lg:py-12">
       <div className="grid lg:grid-cols-5 gap-8">
 
-        {/* =====================================================
-            SIDEBAR
-        ====================================================== */}
+        {/* SIDEBAR */}
 
         <aside className="lg:col-span-1">
           <div className="glass rounded-2xl p-6 sticky top-28">
@@ -1129,24 +1466,28 @@ export default function Admin() {
             </div>
 
             <nav className="space-y-1">
-              {menuItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() =>
-                    setTab(item.id)
-                  }
-                  className={classNames(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all',
-                    tab === item.id
-                      ? 'bg-gold-400/10 text-gold-400 font-medium'
-                      : 'text-ink-300 hover:text-white hover:bg-white/5',
-                  )}
-                >
-                  <item.icon className="w-4 h-4" />
+              {menuItems.map(
+                (item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() =>
+                      setTab(item.id)
+                    }
+                    className={classNames(
+                      'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all',
+                      tab ===
+                        item.id
+                        ? 'bg-gold-400/10 text-gold-400 font-medium'
+                        : 'text-ink-300 hover:text-white hover:bg-white/5',
+                    )}
+                  >
+                    <item.icon className="w-4 h-4" />
 
-                  {item.label}
-                </button>
-              ))}
+                    {item.label}
+                  </button>
+                ),
+              )}
 
               <Link
                 to="/"
@@ -1159,17 +1500,18 @@ export default function Admin() {
           </div>
         </aside>
 
-        {/* =====================================================
-            CONTENT
-        ====================================================== */}
+        {/* CONTENT */}
 
-        <div className="lg:col-span-4">
+        <main className="lg:col-span-4">
 
-          {/* GLOBAL REFRESH */}
+          {/* REFRESH */}
 
           <div className="flex justify-end mb-4">
             <button
-              onClick={loadAdminData}
+              type="button"
+              onClick={() =>
+                void loadAdminData()
+              }
               disabled={dataLoading}
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-ink-300 hover:text-white transition disabled:opacity-50"
             >
@@ -1185,9 +1527,7 @@ export default function Admin() {
             </button>
           </div>
 
-          {/* ===================================================
-              DASHBOARD
-          ==================================================== */}
+          {/* DASHBOARD */}
 
           {tab === 'dashboard' && (
             <motion.div
@@ -1237,8 +1577,6 @@ export default function Admin() {
                 />
               </div>
 
-              {/* PAYMENT SUMMARY */}
-
               <div className="grid grid-cols-2 gap-4 mt-4">
 
                 <div className="glass rounded-2xl p-5">
@@ -1276,9 +1614,8 @@ export default function Admin() {
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* RECENT ORDERS */}
+              </div>
 
               <div className="mt-8">
                 <h2 className="font-display text-xl font-bold text-white mb-4">
@@ -1286,7 +1623,6 @@ export default function Admin() {
                 </h2>
 
                 <div className="glass rounded-2xl overflow-hidden">
-
                   {orders
                     .slice(0, 5)
                     .map(
@@ -1326,7 +1662,8 @@ export default function Admin() {
                             <span className="text-sm font-bold text-gold-400">
                               {formatNaira(
                                 Number(
-                                  order.total,
+                                  order.total ||
+                                    0,
                                 ),
                               )}
                             </span>
@@ -1335,7 +1672,8 @@ export default function Admin() {
                       ),
                     )}
 
-                  {orders.length === 0 && (
+                  {orders.length ===
+                    0 && (
                     <p className="p-6 text-center text-ink-400 text-sm">
                       No orders yet
                     </p>
@@ -1345,9 +1683,7 @@ export default function Admin() {
             </motion.div>
           )}
 
-          {/* ===================================================
-              PRODUCTS
-          ==================================================== */}
+          {/* PRODUCTS */}
 
           {tab === 'products' && (
             <motion.div
@@ -1366,6 +1702,7 @@ export default function Admin() {
                 </h1>
 
                 <button
+                  type="button"
                   onClick={() =>
                     setShowProductForm(
                       true,
@@ -1379,7 +1716,6 @@ export default function Admin() {
               </div>
 
               <div className="glass rounded-2xl overflow-hidden">
-
                 {products.map(
                   (
                     product,
@@ -1395,9 +1731,10 @@ export default function Admin() {
                     >
                       <img
                         src={
-                          product.images?.[0]
+                          product.images?.[0] ||
+                          '/placeholder-product.png'
                         }
-                        alt=""
+                        alt={product.name}
                         className="w-12 h-16 object-cover rounded-lg shrink-0"
                       />
 
@@ -1408,7 +1745,10 @@ export default function Admin() {
 
                         <p className="text-xs text-ink-400">
                           {formatNaira(
-                            product.price,
+                            Number(
+                              product.price ||
+                                0,
+                            ),
                           )}{' '}
                           · Stock:{' '}
                           {product.stock}
@@ -1416,21 +1756,14 @@ export default function Admin() {
                       </div>
 
                       <div className="flex gap-1">
-
-                        {(
-                          [
-                            'is_featured',
-                            'is_new',
-                            'is_bestseller',
-                            'is_trending',
-                            'is_limited',
-                          ] as const
-                        ).map(
+                        {PRODUCT_FLAGS.map(
                           (flag) => (
                             <button
                               key={flag}
+                              type="button"
+                              title={flag}
                               onClick={() =>
-                                handleToggleFlag(
+                                void handleToggleFlag(
                                   product,
                                   flag,
                                 )
@@ -1463,12 +1796,14 @@ export default function Admin() {
                       </div>
 
                       <button
+                        type="button"
                         onClick={() =>
-                          handleDeleteProduct(
+                          void handleDeleteProduct(
                             product,
                           )
                         }
                         className="text-ink-500 hover:text-red-400"
+                        title="Delete product"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -1476,7 +1811,8 @@ export default function Admin() {
                   ),
                 )}
 
-                {products.length === 0 && (
+                {products.length ===
+                  0 && (
                   <p className="p-6 text-center text-ink-400 text-sm">
                     No products
                   </p>
@@ -1485,9 +1821,7 @@ export default function Admin() {
             </motion.div>
           )}
 
-          {/* ===================================================
-              CATEGORIES
-          ==================================================== */}
+          {/* CATEGORIES */}
 
           {tab === 'categories' && (
             <motion.div
@@ -1506,6 +1840,7 @@ export default function Admin() {
                 </h1>
 
                 <button
+                  type="button"
                   onClick={() =>
                     setShowCategoryForm(
                       true,
@@ -1519,7 +1854,6 @@ export default function Admin() {
               </div>
 
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-
                 {categories.map(
                   (category) => (
                     <div
@@ -1531,7 +1865,9 @@ export default function Admin() {
                           src={
                             category.image_url
                           }
-                          alt=""
+                          alt={
+                            category.name
+                          }
                           className="w-full h-32 object-cover"
                         />
                       )}
@@ -1552,12 +1888,14 @@ export default function Admin() {
                         </div>
 
                         <button
+                          type="button"
                           onClick={() =>
-                            handleDeleteCategory(
+                            void handleDeleteCategory(
                               category.id,
                             )
                           }
                           className="text-ink-500 hover:text-red-400"
+                          title="Delete category"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -1566,7 +1904,8 @@ export default function Admin() {
                   ),
                 )}
 
-                {categories.length === 0 && (
+                {categories.length ===
+                  0 && (
                   <p className="text-ink-400 text-sm col-span-full text-center py-8">
                     No categories
                   </p>
@@ -1575,9 +1914,7 @@ export default function Admin() {
             </motion.div>
           )}
 
-          {/* ===================================================
-              ORDERS
-          ==================================================== */}
+          {/* ORDERS */}
 
           {tab === 'orders' && (
             <motion.div
@@ -1595,7 +1932,6 @@ export default function Admin() {
               </h1>
 
               <div className="space-y-4">
-
                 {orders.map(
                   (order) => (
                     <div
@@ -1620,11 +1956,9 @@ export default function Admin() {
                           <p className="text-xs text-ink-400 mt-2">
                             Payment ref:{' '}
                             <span className="text-white">
-                              {
-                                order.payment_reference ||
+                              {order.payment_reference ||
                                 order.payment_ref ||
-                                'N/A'
-                              }
+                                'N/A'}
                             </span>
                           </p>
 
@@ -1638,7 +1972,6 @@ export default function Admin() {
                         </div>
 
                         <div className="flex items-center gap-3 flex-wrap">
-
                           <PaymentStatus
                             status={
                               order.payment_status
@@ -1647,21 +1980,25 @@ export default function Admin() {
 
                           <select
                             value={
-                              order.status
+                              order.status ||
+                              'pending'
                             }
                             onChange={(
-                              e,
+                              event,
                             ) =>
-                              handleUpdateOrderStatus(
+                              void handleUpdateOrderStatus(
                                 order.id,
-                                e.target
-                                  .value,
+                                event
+                                  .target
+                                  .value as OrderStatus,
                               )
                             }
                             className="bg-ink-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white"
                           >
-                            {statusOptions.map(
-                              (status) => (
+                            {ORDER_STATUSES.map(
+                              (
+                                status,
+                              ) => (
                                 <option
                                   key={
                                     status
@@ -1682,7 +2019,8 @@ export default function Admin() {
                           <span className="text-sm font-bold text-gold-400">
                             {formatNaira(
                               Number(
-                                order.total,
+                                order.total ||
+                                  0,
                               ),
                             )}
                           </span>
@@ -1692,7 +2030,8 @@ export default function Admin() {
                   ),
                 )}
 
-                {orders.length === 0 && (
+                {orders.length ===
+                  0 && (
                   <div className="glass rounded-2xl p-8 text-center text-ink-400 text-sm">
                     No orders
                   </div>
@@ -1701,9 +2040,7 @@ export default function Admin() {
             </motion.div>
           )}
 
-          {/* ===================================================
-              CUSTOMERS
-          ==================================================== */}
+          {/* CUSTOMERS */}
 
           {tab === 'customers' && (
             <motion.div
@@ -1721,7 +2058,6 @@ export default function Admin() {
               </h1>
 
               <div className="glass rounded-2xl overflow-hidden">
-
                 {customers.map(
                   (
                     customer,
@@ -1738,7 +2074,6 @@ export default function Admin() {
                       )}
                     >
                       <div className="flex items-center gap-3">
-
                         <div className="w-10 h-10 rounded-full bg-gold-400/20 border border-gold-400/40 flex items-center justify-center text-gold-400 font-bold text-sm">
                           {(
                             customer.full_name?.[0] ??
@@ -1786,7 +2121,8 @@ export default function Admin() {
                   ),
                 )}
 
-                {customers.length === 0 && (
+                {customers.length ===
+                  0 && (
                   <p className="p-6 text-center text-ink-400 text-sm">
                     No customers
                   </p>
@@ -1795,9 +2131,7 @@ export default function Admin() {
             </motion.div>
           )}
 
-          {/* ===================================================
-              REVIEWS
-          ==================================================== */}
+          {/* REVIEWS */}
 
           {tab === 'reviews' && (
             <motion.div
@@ -1822,7 +2156,6 @@ export default function Admin() {
               </div>
 
               <div className="space-y-3">
-
                 {reviews.map(
                   (review) => (
                     <div
@@ -1830,10 +2163,8 @@ export default function Admin() {
                       className="glass rounded-xl p-4"
                     >
                       <div className="flex items-start justify-between gap-4">
-
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-
                             <span className="text-sm font-medium text-white">
                               {review
                                 .profile
@@ -1864,7 +2195,10 @@ export default function Admin() {
                                     className={classNames(
                                       'w-3 h-3',
                                       index <
-                                        review.rating
+                                        Number(
+                                          review.rating ||
+                                            0,
+                                        )
                                         ? 'fill-gold-400 text-gold-400'
                                         : 'text-ink-700',
                                     )}
@@ -1903,12 +2237,14 @@ export default function Admin() {
                         </div>
 
                         <button
+                          type="button"
                           onClick={() =>
-                            handleDeleteReview(
+                            void handleDeleteReview(
                               review.id,
                             )
                           }
                           className="text-ink-500 hover:text-red-400"
+                          title="Delete review"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -1917,7 +2253,8 @@ export default function Admin() {
                   ),
                 )}
 
-                {reviews.length === 0 && (
+                {reviews.length ===
+                  0 && (
                   <div className="glass rounded-2xl p-8 text-center text-ink-400 text-sm">
                     No reviews
                   </div>
@@ -1926,9 +2263,7 @@ export default function Admin() {
             </motion.div>
           )}
 
-          {/* ===================================================
-              COUPONS
-          ==================================================== */}
+          {/* COUPONS */}
 
           {tab === 'coupons' && (
             <motion.div
@@ -1942,12 +2277,12 @@ export default function Admin() {
               }}
             >
               <div className="flex items-center justify-between mb-6">
-
                 <h1 className="font-display text-3xl font-bold text-white">
                   Manage Coupons
                 </h1>
 
                 <button
+                  type="button"
                   onClick={() =>
                     setShowCouponForm(
                       true,
@@ -1961,7 +2296,6 @@ export default function Admin() {
               </div>
 
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-
                 {coupons.map(
                   (coupon) => (
                     <div
@@ -1972,12 +2306,14 @@ export default function Admin() {
                         <Ticket className="w-6 h-6 text-gold-400" />
 
                         <button
+                          type="button"
                           onClick={() =>
-                            handleDeleteCoupon(
+                            void handleDeleteCoupon(
                               coupon.id,
                             )
                           }
                           className="text-ink-500 hover:text-red-400"
+                          title="Delete coupon"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -1994,14 +2330,20 @@ export default function Admin() {
                         'percent'
                           ? `${coupon.value}% off`
                           : `${formatNaira(
-                              coupon.value,
+                              Number(
+                                coupon.value ||
+                                  0,
+                              ),
                             )} off`}
                       </p>
 
                       <p className="text-xs text-ink-400 mt-2">
                         Min order:{' '}
                         {formatNaira(
-                          coupon.min_order,
+                          Number(
+                            coupon.min_order ||
+                              0,
+                          ),
                         )}
                       </p>
 
@@ -2021,7 +2363,8 @@ export default function Admin() {
                   ),
                 )}
 
-                {coupons.length === 0 && (
+                {coupons.length ===
+                  0 && (
                   <p className="text-ink-400 text-sm col-span-full text-center py-8">
                     No coupons
                   </p>
@@ -2029,12 +2372,10 @@ export default function Admin() {
               </div>
             </motion.div>
           )}
-        </div>
+        </main>
       </div>
 
-      {/* =======================================================
-          PRODUCT MODAL
-      ======================================================== */}
+      {/* PRODUCT MODAL */}
 
       {showProductForm && (
         <Modal
@@ -2056,12 +2397,15 @@ export default function Admin() {
               value={
                 productForm.name
               }
-              onChange={(e) =>
-                setProductForm({
-                  ...productForm,
-                  name: e.target
-                    .value,
-                })
+              onChange={(event) =>
+                setProductForm(
+                  (previous) => ({
+                    ...previous,
+                    name:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               className="input-field"
             />
@@ -2072,12 +2416,15 @@ export default function Admin() {
               value={
                 productForm.description
               }
-              onChange={(e) =>
-                setProductForm({
-                  ...productForm,
-                  description:
-                    e.target.value,
-                })
+              onChange={(event) =>
+                setProductForm(
+                  (previous) => ({
+                    ...previous,
+                    description:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               rows={3}
               className="input-field resize-none"
@@ -2086,33 +2433,43 @@ export default function Admin() {
             <div className="grid grid-cols-2 gap-4">
               <input
                 type="number"
+                min="0"
+                step="0.01"
                 required
                 placeholder="Price (NGN)"
                 value={
                   productForm.price
                 }
-                onChange={(e) =>
-                  setProductForm({
-                    ...productForm,
-                    price: e.target
-                      .value,
-                  })
+                onChange={(event) =>
+                  setProductForm(
+                    (previous) => ({
+                      ...previous,
+                      price:
+                        event.target
+                          .value,
+                    }),
+                  )
                 }
                 className="input-field"
               />
 
               <input
                 type="number"
+                min="0"
+                step="0.01"
                 placeholder="Compare at Price"
                 value={
                   productForm.compare_at_price
                 }
-                onChange={(e) =>
-                  setProductForm({
-                    ...productForm,
-                    compare_at_price:
-                      e.target.value,
-                  })
+                onChange={(event) =>
+                  setProductForm(
+                    (previous) => ({
+                      ...previous,
+                      compare_at_price:
+                        event.target
+                          .value,
+                    }),
+                  )
                 }
                 className="input-field"
               />
@@ -2122,12 +2479,15 @@ export default function Admin() {
               value={
                 productForm.category_id
               }
-              onChange={(e) =>
-                setProductForm({
-                  ...productForm,
-                  category_id:
-                    e.target.value,
-                })
+              onChange={(event) =>
+                setProductForm(
+                  (previous) => ({
+                    ...previous,
+                    category_id:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               className="input-field"
             >
@@ -2153,7 +2513,6 @@ export default function Admin() {
             </select>
 
             <div className="space-y-3">
-
               <label className="block text-sm font-medium text-white">
                 Product Images
               </label>
@@ -2181,9 +2540,8 @@ export default function Admin() {
                 Click to upload product images
 
                 <span className="block text-xs text-ink-500 mt-1">
-                  JPG, PNG, WEBP or GIF ·
-                  Maximum 5MB each · Up
-                  to 6 images
+                  JPG, PNG, WEBP or GIF · Maximum
+                  5MB each · Up to 6 images
                 </span>
               </button>
 
@@ -2195,50 +2553,27 @@ export default function Admin() {
                       file,
                       index,
                     ) => (
-                      <div
-                        key={`${file.name}-${index}`}
-                        className="relative aspect-square rounded-xl overflow-hidden bg-ink-900"
-                      >
-                        <img
-                          src={URL.createObjectURL(
-                            file,
-                          )}
-                          alt=""
-                          className="w-full h-full object-cover"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setProductForm(
-                              (
-                                prev,
-                              ) => ({
-                                ...prev,
-                                images:
-                                  prev.images.filter(
-                                    (
-                                      _,
-                                      imageIndex,
-                                    ) =>
-                                      imageIndex !==
-                                      index,
-                                  ),
-                              }),
-                            )
-                          }
-                          className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white"
-                        >
-                          ×
-                        </button>
-
-                        {index ===
-                          0 && (
-                          <span className="absolute bottom-2 left-2 text-[10px] bg-gold-400 text-black px-2 py-1 rounded">
-                            Main
-                          </span>
-                        )}
-                      </div>
+                      <ProductImagePreview
+                        key={`${file.name}-${file.lastModified}-${index}`}
+                        file={file}
+                        index={index}
+                        onRemove={() =>
+                          setProductForm(
+                            (previous) => ({
+                              ...previous,
+                              images:
+                                previous.images.filter(
+                                  (
+                                    _,
+                                    imageIndex,
+                                  ) =>
+                                    imageIndex !==
+                                    index,
+                                ),
+                            }),
+                          )
+                        }
+                      />
                     ),
                   )}
                 </div>
@@ -2253,12 +2588,15 @@ export default function Admin() {
                 value={
                   productForm.sizes
                 }
-                onChange={(e) =>
-                  setProductForm({
-                    ...productForm,
-                    sizes: e.target
-                      .value,
-                  })
+                onChange={(event) =>
+                  setProductForm(
+                    (previous) => ({
+                      ...previous,
+                      sizes:
+                        event.target
+                          .value,
+                    }),
+                  )
                 }
                 className="input-field"
               />
@@ -2270,12 +2608,15 @@ export default function Admin() {
                 value={
                   productForm.colors
                 }
-                onChange={(e) =>
-                  setProductForm({
-                    ...productForm,
-                    colors:
-                      e.target.value,
-                  })
+                onChange={(event) =>
+                  setProductForm(
+                    (previous) => ({
+                      ...previous,
+                      colors:
+                        event.target
+                          .value,
+                    }),
+                  )
                 }
                 className="input-field"
               />
@@ -2284,17 +2625,22 @@ export default function Admin() {
             <div className="grid grid-cols-2 gap-4">
               <input
                 type="number"
+                min="0"
+                step="1"
                 required
                 placeholder="Stock"
                 value={
                   productForm.stock
                 }
-                onChange={(e) =>
-                  setProductForm({
-                    ...productForm,
-                    stock: e.target
-                      .value,
-                  })
+                onChange={(event) =>
+                  setProductForm(
+                    (previous) => ({
+                      ...previous,
+                      stock:
+                        event.target
+                          .value,
+                    }),
+                  )
                 }
                 className="input-field"
               />
@@ -2303,12 +2649,15 @@ export default function Admin() {
                 value={
                   productForm.badge
                 }
-                onChange={(e) =>
-                  setProductForm({
-                    ...productForm,
-                    badge: e.target
-                      .value,
-                  })
+                onChange={(event) =>
+                  setProductForm(
+                    (previous) => ({
+                      ...previous,
+                      badge:
+                        event.target
+                          .value,
+                    }),
+                  )
                 }
                 className="input-field"
               >
@@ -2337,15 +2686,7 @@ export default function Admin() {
             </div>
 
             <div className="flex flex-wrap gap-3">
-              {(
-                [
-                  'is_featured',
-                  'is_new',
-                  'is_bestseller',
-                  'is_trending',
-                  'is_limited',
-                ] as const
-              ).map(
+              {PRODUCT_FLAGS.map(
                 (flag) => (
                   <label
                     key={flag}
@@ -2358,14 +2699,17 @@ export default function Admin() {
                           flag
                         ]
                       }
-                      onChange={(e) =>
+                      onChange={(
+                        event,
+                      ) =>
                         setProductForm(
-                          {
-                            ...productForm,
+                          (previous) => ({
+                            ...previous,
                             [flag]:
-                              e.target
+                              event
+                                .target
                                 .checked,
-                          },
+                          }),
                         )
                       }
                     />
@@ -2394,9 +2738,7 @@ export default function Admin() {
         </Modal>
       )}
 
-      {/* =======================================================
-          CATEGORY MODAL
-      ======================================================== */}
+      {/* CATEGORY MODAL */}
 
       {showCategoryForm && (
         <Modal
@@ -2420,12 +2762,15 @@ export default function Admin() {
               value={
                 categoryForm.name
               }
-              onChange={(e) =>
-                setCategoryForm({
-                  ...categoryForm,
-                  name: e.target
-                    .value,
-                })
+              onChange={(event) =>
+                setCategoryForm(
+                  (previous) => ({
+                    ...previous,
+                    name:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               className="input-field"
             />
@@ -2435,12 +2780,15 @@ export default function Admin() {
               value={
                 categoryForm.description
               }
-              onChange={(e) =>
-                setCategoryForm({
-                  ...categoryForm,
-                  description:
-                    e.target.value,
-                })
+              onChange={(event) =>
+                setCategoryForm(
+                  (previous) => ({
+                    ...previous,
+                    description:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               rows={2}
               className="input-field resize-none"
@@ -2463,21 +2811,22 @@ export default function Admin() {
               onClick={() =>
                 categoryImageInputRef.current?.click()
               }
-              className="w-full rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-8 text-center text-sm text-ink-300"
+              className="w-full rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-8 text-center text-sm text-ink-300 hover:border-gold-400/50 hover:bg-white/10"
             >
               Click to upload category image
+
+              <span className="block text-xs text-ink-500 mt-1">
+                JPG, PNG, WEBP or GIF · Maximum
+                5MB
+              </span>
             </button>
 
             {categoryForm.image && (
-              <div className="relative aspect-video rounded-xl overflow-hidden">
-                <img
-                  src={URL.createObjectURL(
-                    categoryForm.image,
-                  )}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-              </div>
+              <CategoryImagePreview
+                file={
+                  categoryForm.image
+                }
+              />
             )}
 
             <button
@@ -2490,9 +2839,7 @@ export default function Admin() {
         </Modal>
       )}
 
-      {/* =======================================================
-          COUPON MODAL
-      ======================================================== */}
+      {/* COUPON MODAL */}
 
       {showCouponForm && (
         <Modal
@@ -2516,26 +2863,32 @@ export default function Admin() {
               value={
                 couponForm.code
               }
-              onChange={(e) =>
-                setCouponForm({
-                  ...couponForm,
-                  code: e.target
-                    .value,
-                })
+              onChange={(event) =>
+                setCouponForm(
+                  (previous) => ({
+                    ...previous,
+                    code:
+                      event.target
+                        .value,
+                  }),
+                )
               }
-              className="input-field"
+              className="input-field uppercase"
             />
 
             <select
               value={
                 couponForm.type
               }
-              onChange={(e) =>
-                setCouponForm({
-                  ...couponForm,
-                  type: e.target
-                    .value,
-                })
+              onChange={(event) =>
+                setCouponForm(
+                  (previous) => ({
+                    ...previous,
+                    type:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               className="input-field"
             >
@@ -2550,33 +2903,43 @@ export default function Admin() {
 
             <input
               type="number"
+              min="0"
+              step="0.01"
               required
               placeholder="Value"
               value={
                 couponForm.value
               }
-              onChange={(e) =>
-                setCouponForm({
-                  ...couponForm,
-                  value: e.target
-                    .value,
-                })
+              onChange={(event) =>
+                setCouponForm(
+                  (previous) => ({
+                    ...previous,
+                    value:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               className="input-field"
             />
 
             <input
               type="number"
+              min="0"
+              step="0.01"
               placeholder="Minimum Order"
               value={
                 couponForm.min_order
               }
-              onChange={(e) =>
-                setCouponForm({
-                  ...couponForm,
-                  min_order:
-                    e.target.value,
-                })
+              onChange={(event) =>
+                setCouponForm(
+                  (previous) => ({
+                    ...previous,
+                    min_order:
+                      event.target
+                        .value,
+                  }),
+                )
               }
               className="input-field"
             />
@@ -2591,6 +2954,144 @@ export default function Admin() {
         </Modal>
       )}
     </div>
+  );
+}
+
+/*
+ * ============================================================
+ * PRODUCT IMAGE PREVIEW
+ * ============================================================
+ */
+
+function ProductImagePreview({
+  file,
+  index,
+  onRemove,
+}: {
+  file: File;
+  index: number;
+  onRemove: () => void;
+}) {
+  const [previewUrl, setPreviewUrl] =
+    useState('');
+
+  useEffect(() => {
+    const url =
+      URL.createObjectURL(file);
+
+    setPreviewUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [file]);
+
+  return (
+    <div className="relative aspect-square rounded-xl overflow-hidden bg-ink-900">
+      {previewUrl && (
+        <img
+          src={previewUrl}
+          alt=""
+          className="w-full h-full object-cover"
+        />
+      )}
+
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white hover:bg-red-500 transition"
+        title="Remove image"
+      >
+        ×
+      </button>
+
+      {index === 0 && (
+        <span className="absolute bottom-2 left-2 text-[10px] bg-gold-400 text-black px-2 py-1 rounded">
+          Main
+        </span>
+      )}
+    </div>
+  );
+}
+
+/*
+ * ============================================================
+ * CATEGORY IMAGE PREVIEW
+ * ============================================================
+ */
+
+function CategoryImagePreview({
+  file,
+}: {
+  file: File;
+}) {
+  const [previewUrl, setPreviewUrl] =
+    useState('');
+
+  useEffect(() => {
+    const url =
+      URL.createObjectURL(file);
+
+    setPreviewUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [file]);
+
+  return (
+    <div className="relative aspect-video rounded-xl overflow-hidden bg-ink-900">
+      {previewUrl && (
+        <img
+          src={previewUrl}
+          alt=""
+          className="w-full h-full object-cover"
+        />
+      )}
+    </div>
+  );
+}
+
+/*
+ * ============================================================
+ * PAYMENT STATUS
+ * ============================================================
+ */
+
+function PaymentStatus({
+  status,
+}: {
+  status?: string | null;
+}) {
+  const value =
+    status || 'pending';
+
+  if (value === 'paid') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-green-500/20 text-green-400">
+        <CheckCircle className="w-3 h-3" />
+        Paid
+      </span>
+    );
+  }
+
+  if (
+    value === 'failed' ||
+    value === 'cancelled'
+  ) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-red-500/20 text-red-400">
+        <XCircle className="w-3 h-3" />
+        {value}
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-yellow-500/20 text-yellow-400">
+      <Clock className="w-3 h-3" />
+      Pending
+    </span>
   );
 }
 
@@ -2660,7 +3161,6 @@ function Modal({
 }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-
       <div
         className="absolute inset-0 bg-ink-950/80 backdrop-blur-sm"
         onClick={onClose}
@@ -2678,14 +3178,15 @@ function Modal({
         className="relative glass-dark rounded-2xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between mb-4">
-
           <h2 className="font-display text-xl font-bold text-white">
             {title}
           </h2>
 
           <button
+            type="button"
             onClick={onClose}
             className="text-ink-400 hover:text-white"
+            title="Close"
           >
             <X className="w-5 h-5" />
           </button>

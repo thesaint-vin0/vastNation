@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Heart, Star, ShoppingBag, Zap, Minus, Plus, Truck, Shield, RefreshCw, ChevronRight } from 'lucide-react';
@@ -9,9 +9,9 @@ import { useWishlist } from '../context/WishlistContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { getProductBySlug, getRelatedProducts, getReviews, addReview } from '../services/api';
+import { supabase } from '../lib/supabase';
 import { formatNaira, classNames, discountPercent } from '../utils/helpers';
 import type { Product, Review } from '../types';
-
 export default function ProductDetails() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
@@ -36,6 +36,17 @@ export default function ProductDetails() {
   const [reviewComment, setReviewComment] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
 
+
+  const refreshReviews = useCallback(async (productId: string) => {
+  try {
+    const data = await getReviews(productId);
+    setReviews(data);
+  } catch (error) {
+    console.error('Failed to refresh reviews:', error);
+  }
+}, []);
+
+
   useEffect(() => {
     if (!slug) return;
     setLoading(true);
@@ -54,6 +65,34 @@ export default function ProductDetails() {
       })
       .finally(() => setLoading(false));
   }, [slug]);
+
+  useEffect(() => {
+  if (!product?.id) return;
+
+  const channel = supabase
+    .channel(`product-reviews-${product.id}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'reviews',
+        filter: `product_id=eq.${product.id}`,
+      },
+      (payload) => {
+        console.log('PRODUCT REVIEW REALTIME:', payload);
+
+        refreshReviews(product.id);
+      },
+    )
+    .subscribe((status) => {
+      console.log('PRODUCT REVIEW REALTIME STATUS:', status);
+    });
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [product?.id, refreshReviews]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -89,27 +128,47 @@ export default function ProductDetails() {
   };
 
   const handleSubmitReview = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user) {
-      toast('Please sign in to leave a review', 'error');
-      navigate('/login');
-      return;
-    }
-    if (!product) return;
-    setSubmittingReview(true);
-    try {
-      await addReview(product.id, user.id, reviewRating, reviewTitle, reviewComment);
-      toast('Review submitted!');
-      setReviewTitle('');
-      setReviewComment('');
-      setReviewRating(5);
-      getReviews(product.id).then(setReviews);
-    } catch {
-      toast('Failed to submit review', 'error');
-    } finally {
-      setSubmittingReview(false);
-    }
-  };
+  e.preventDefault();
+
+  if (!user) {
+    toast('Please sign in to leave a review', 'error');
+    navigate('/login');
+    return;
+  }
+
+  if (!product) return;
+
+  if (!reviewComment.trim()) {
+    toast('Please write a review comment', 'error');
+    return;
+  }
+
+  setSubmittingReview(true);
+
+  try {
+    const newReview = await addReview(
+      product.id,
+      user.id,
+      reviewRating,
+      reviewTitle,
+      reviewComment,
+    );
+
+    console.log('New review:', newReview);
+
+    toast('Review submitted!');
+    setReviewTitle('');
+    setReviewComment('');
+    setReviewRating(5);
+
+    await refreshReviews(product.id);
+  } catch (error) {
+    console.error('Failed to submit review:', error);
+    toast('Failed to submit review', 'error');
+  } finally {
+    setSubmittingReview(false);
+  }
+};
 
   if (loading) {
     return (

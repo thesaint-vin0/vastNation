@@ -78,11 +78,17 @@ export type Order = {
   coupon_code: string | null;
   shipping_address: Record<string, unknown> | null;
   delivery_method: string;
+
+   // Payment
   payment_ref: string | null;
+  payment_reference?: string | null;
   payment_status: string;
+  paid_at?: string | null;
+  payment_method?: string | null;
+  paystack_transaction_id?: number | null;
+
   created_at: string;
 };
-
 export type OrderItem = {
   id: string;
   order_id: string;

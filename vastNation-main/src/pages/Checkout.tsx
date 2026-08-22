@@ -40,23 +40,24 @@ export default function Checkout() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const { items, subtotal, clearCart } = useCart();
+  const { items, subtotal } = useCart();
   const { user } = useAuth();
   const { toast } = useToast();
+
+  function calculateShippingSafe(sub: number): number {
+    return sub >= 100000 ? 0 : 2500;
+  }
 
   const state = (location.state as CheckoutState) ?? {
     coupon: null,
     deliveryMethod: 'standard',
     discount: 0,
     shipping: calculateShippingSafe(subtotal),
-    total: subtotal,
+    total: subtotal + calculateShippingSafe(subtotal),
   };
 
   const [step, setStep] = useState(1);
   const [processing, setProcessing] = useState(false);
-  const [completed, setCompleted] = useState(false);
-  const [orderNumber, setOrderNumber] = useState('');
-  const [paymentRef, setPaymentRef] = useState('');
 
   const [customerInfo, setCustomerInfo] = useState({
     fullName: user?.email ?? '',
@@ -73,28 +74,24 @@ export default function Checkout() {
     country: 'Nigeria',
   });
 
-  function calculateShippingSafe(sub: number): number {
-    return sub >= 100 ? 0 : 2500;
-  }
-
   /*
    * ============================================================
    * PAY FOR ORDER
    * ============================================================
    *
-   * Flow:
+   * Payment flow:
    *
-   * 1. Check authentication
+   * 1. Validate user
    * 2. Validate customer information
-   * 3. Create order as "pending"
-   * 4. Call Supabase paystack-initialize function
-   * 5. Receive Paystack authorization_url
+   * 3. Validate shipping information
+   * 4. Create pending order in Supabase
+   * 5. Initialize Paystack through the Supabase Edge Function
    * 6. Redirect customer to Paystack
    *
-   * The order is NOT marked as paid here.
+   * The browser does NOT mark the order as paid.
    *
-   * Paystack webhook will later confirm the payment and
-   * update payment_status to "paid".
+   * The Paystack webhook is responsible for confirming
+   * successful payment server-side.
    */
   const handlePay = async () => {
     if (!user) {
@@ -147,7 +144,7 @@ export default function Checkout() {
 
     setProcessing(true);
 
-    const orderNumberValue = generateOrderNumber();
+    const orderNumber = generateOrderNumber();
     const localReference = generateReference();
 
     try {
@@ -161,8 +158,11 @@ export default function Checkout() {
         {
           user_id: user.id,
 
-          order_number: orderNumberValue,
+          order_number: orderNumber,
 
+          /*
+           * The order starts as pending.
+           */
           status: 'pending',
 
           subtotal,
@@ -183,22 +183,20 @@ export default function Checkout() {
           delivery_method: state.deliveryMethod,
 
           /*
-           * This is initially a local/reference value.
+           * This reference allows the order to be
+           * associated with the payment initialization.
            *
-           * Your Paystack Edge Function should ultimately use
-           * the Paystack reference as the source of truth.
+           * The Paystack reference returned by the Edge
+           * Function remains the payment source of truth.
            */
           payment_ref: localReference,
 
           /*
-           * Payment has NOT happened yet.
+           * Payment has not happened yet.
            */
           payment_status: 'pending',
         },
 
-        /*
-         * Order items
-         */
         items.map((item) => ({
           product_id: item.product.id,
           name: item.product.name,
@@ -211,7 +209,7 @@ export default function Checkout() {
       );
 
       /*
-       * Make sure Supabase actually returned an order ID.
+       * Make sure the order was actually created.
        */
       if (!order?.id) {
         throw new Error(
@@ -224,12 +222,10 @@ export default function Checkout() {
        * STEP 2 — INITIALIZE PAYSTACK
        * ========================================================
        *
-       * This calls:
+       * The Supabase Edge Function communicates with Paystack
+       * using the secret key.
        *
-       * supabase/functions/paystack-initialize
-       *
-       * The Edge Function communicates with Paystack using
-       * the secret key.
+       * The secret key must NEVER be exposed in this component.
        */
 
       const payment = await initializePaystackPayment(
@@ -239,7 +235,7 @@ export default function Checkout() {
       );
 
       /*
-       * Make sure Paystack returned a checkout URL.
+       * Make sure Paystack returned a valid checkout URL.
        */
       if (!payment?.authorization_url) {
         throw new Error(
@@ -248,42 +244,22 @@ export default function Checkout() {
       }
 
       /*
-       * Store information locally for the UI.
-       *
-       * We are NOT marking the payment as successful.
-       */
-      setOrderNumber(orderNumberValue);
-
-      setPaymentRef(
-        payment.reference ?? localReference,
-      );
-
-      /*
        * ========================================================
        * STEP 3 — REDIRECT TO PAYSTACK
        * ========================================================
+       *
+       * Do NOT:
+       *
+       * - mark the order as paid
+       * - clear the cart
+       * - update payment_status
+       * - create a successful payment record
+       *
+       * Those actions should happen after Paystack confirms
+       * payment through the webhook.
        */
 
-      window.location.href =
-        payment.authorization_url;
-
-      /*
-       * IMPORTANT:
-       *
-       * We intentionally DO NOT:
-       *
-       * clearCart()
-       *
-       * setCompleted(true)
-       *
-       * recordPayment()
-       *
-       * updateOrderPayment(..., 'paid')
-       *
-       * because the customer has not completed payment yet.
-       *
-       * The Paystack webhook will handle successful payment.
-       */
+      window.location.href = payment.authorization_url;
     } catch (error) {
       console.error(
         'Paystack payment initialization failed:',
@@ -305,12 +281,16 @@ export default function Checkout() {
    * ============================================================
    */
 
-  if (items.length === 0 && !completed) {
+  if (items.length === 0) {
     return (
       <div className="section-padding py-20 text-center">
         <h1 className="font-display text-3xl text-white mb-4">
           Your Cart is Empty
         </h1>
+
+        <p className="text-ink-400 mb-6">
+          Add some products to your cart before checking out.
+        </p>
 
         <Link
           to="/shop"
@@ -318,120 +298,6 @@ export default function Checkout() {
         >
           Go to Shop
         </Link>
-      </div>
-    );
-  }
-
-  /*
-   * ============================================================
-   * PAYMENT SUCCESS SCREEN
-   * ============================================================
-   *
-   * This screen is kept for the existing checkout structure.
-   *
-   * IMPORTANT:
-   *
-   * The new Paystack flow does not automatically reach this
-   * screen after redirecting to Paystack.
-   *
-   * We will later create a dedicated payment-return page.
-   */
-
-  if (completed) {
-    return (
-      <div className="section-padding py-20">
-        <motion.div
-          initial={{
-            opacity: 0,
-            scale: 0.9,
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1,
-          }}
-          className="max-w-lg mx-auto text-center"
-        >
-          <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{
-              delay: 0.2,
-              type: 'spring',
-            }}
-            className="w-24 h-24 rounded-full bg-green-500/20 border border-green-500/40 flex items-center justify-center mx-auto mb-6"
-          >
-            <CheckCircle className="w-12 h-12 text-green-400" />
-          </motion.div>
-
-          <h1 className="font-display text-4xl font-bold text-white mb-3">
-            Order Confirmed!
-          </h1>
-
-          <p className="text-ink-300 mb-8">
-            Thank you for your purchase. We've sent a
-            confirmation email with your order details.
-          </p>
-
-          <div className="glass rounded-2xl p-6 text-left mb-8">
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-sm text-ink-400">
-                  Order Number
-                </span>
-
-                <span className="text-sm text-white font-mono font-medium">
-                  {orderNumber}
-                </span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className="text-sm text-ink-400">
-                  Payment Reference
-                </span>
-
-                <span className="text-sm text-white font-mono font-medium">
-                  {paymentRef}
-                </span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className="text-sm text-ink-400">
-                  Total Paid
-                </span>
-
-                <span className="text-sm text-gold-400 font-bold">
-                  {formatNaira(state.total)}
-                </span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className="text-sm text-ink-400">
-                  Status
-                </span>
-
-                <span className="text-sm text-green-400 font-medium">
-                  Paid
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link
-              to="/dashboard"
-              className="btn-gold rounded-lg px-6 py-3 text-sm uppercase tracking-wider"
-            >
-              View Orders
-            </Link>
-
-            <Link
-              to="/shop"
-              className="btn-outline rounded-lg px-6 py-3 text-sm uppercase tracking-wider"
-            >
-              Continue Shopping
-            </Link>
-          </div>
-        </motion.div>
       </div>
     );
   }
@@ -472,7 +338,10 @@ export default function Checkout() {
         Checkout
       </h1>
 
-      {/* Steps */}
+      {/* ======================================================
+          CHECKOUT STEPS
+      ======================================================= */}
+
       <div className="flex items-center gap-2 mb-8 max-w-2xl">
         {steps.map((s, i) => (
           <div
@@ -543,6 +412,7 @@ export default function Checkout() {
 
               <div className="space-y-4">
                 {/* Full Name */}
+
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                     Full Name
@@ -563,6 +433,7 @@ export default function Checkout() {
                 </div>
 
                 {/* Email */}
+
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                     Email
@@ -583,6 +454,7 @@ export default function Checkout() {
                 </div>
 
                 {/* Phone */}
+
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                     Phone
@@ -614,7 +486,7 @@ export default function Checkout() {
               >
                 Continue to Shipping
 
-                <ChevronRight className="w-4 h-4 inline" />
+                <ChevronRight className="w-4 h-4 inline ml-1" />
               </button>
             </motion.div>
           )}
@@ -641,6 +513,7 @@ export default function Checkout() {
 
               <div className="space-y-4">
                 {/* Address Line 1 */}
+
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                     Address Line 1
@@ -661,6 +534,7 @@ export default function Checkout() {
                 </div>
 
                 {/* Address Line 2 */}
+
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                     Address Line 2 (Optional)
@@ -681,6 +555,7 @@ export default function Checkout() {
                 </div>
 
                 {/* City + State */}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -722,6 +597,7 @@ export default function Checkout() {
                 </div>
 
                 {/* Postal Code + Country */}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -750,14 +626,9 @@ export default function Checkout() {
                     <input
                       type="text"
                       value={shippingAddress.country}
-                      onChange={(e) =>
-                        setShippingAddress({
-                          ...shippingAddress,
-                          country: e.target.value,
-                        })
-                      }
                       className="input-field"
                       disabled
+                      readOnly
                     />
                   </div>
                 </div>
@@ -782,7 +653,7 @@ export default function Checkout() {
                 >
                   Continue to Payment
 
-                  <ChevronRight className="w-4 h-4 inline" />
+                  <ChevronRight className="w-4 h-4 inline ml-1" />
                 </button>
               </div>
             </motion.div>
@@ -809,6 +680,7 @@ export default function Checkout() {
               </h2>
 
               {/* Paystack */}
+
               <div className="border border-gold-400/40 rounded-xl p-4 mb-6 bg-gold-400/5">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-gold-400/20 flex items-center justify-center">
@@ -829,7 +701,8 @@ export default function Checkout() {
                 </div>
               </div>
 
-              {/* Security message */}
+              {/* Security Message */}
+
               <div className="flex items-start gap-3 p-4 rounded-xl bg-ink-900/50 mb-6">
                 <Lock className="w-4 h-4 text-gold-400 mt-0.5 shrink-0" />
 
@@ -842,6 +715,7 @@ export default function Checkout() {
               </div>
 
               {/* Buttons */}
+
               <div className="flex gap-3">
                 <button
                   onClick={() => setStep(2)}
@@ -904,7 +778,7 @@ export default function Checkout() {
                   <div className="relative shrink-0">
                     <img
                       src={item.product.images[0]}
-                      alt=""
+                      alt={item.product.name}
                       className="w-14 h-16 object-cover rounded-lg"
                     />
 
@@ -933,7 +807,8 @@ export default function Checkout() {
               ))}
             </div>
 
-            {/* Price breakdown */}
+            {/* Price Breakdown */}
+
             <div className="space-y-2 py-4 border-t border-white/10">
               <div className="flex justify-between text-sm">
                 <span className="text-ink-400">
@@ -973,6 +848,7 @@ export default function Checkout() {
             </div>
 
             {/* Total */}
+
             <div className="flex justify-between items-center pt-4 border-t border-white/10">
               <span className="font-bold text-white">
                 Total

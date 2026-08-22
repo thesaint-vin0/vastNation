@@ -108,17 +108,23 @@ export async function addReview(
   rating: number,
   title: string,
   comment: string,
-): Promise<void> {
-  const { error } = await supabase.from('reviews').insert({
-    product_id: productId,
-    user_id: userId,
-    rating,
-    title,
-    comment,
-  });
-  if (error) throw error;
-}
+): Promise<Review> {
+  const { data, error } = await supabase
+    .from('reviews')
+    .insert({
+      product_id: productId,
+      user_id: userId,
+      rating,
+      title: title.trim() || null,
+      comment: comment.trim(),
+    })
+    .select('*')
+    .single();
 
+  if (error) throw error;
+
+  return data;
+}
 export async function validateCoupon(code: string): Promise<Coupon | null> {
   const { data, error } = await supabase
     .from('coupons')
