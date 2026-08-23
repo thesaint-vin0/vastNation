@@ -66,27 +66,60 @@ export default function ProductDetails() {
       .finally(() => setLoading(false));
   }, [slug]);
 
-  useEffect(() => {
+useEffect(() => {
   if (!product?.id) return;
 
+  const productId = product.id;
+
   const channel = supabase
-    .channel(`product-reviews-${product.id}`)
+    .channel(`product-${productId}-realtime`)
+
+    // Listen for review changes
     .on(
       'postgres_changes',
       {
         event: '*',
         schema: 'public',
         table: 'reviews',
-        filter: `product_id=eq.${product.id}`,
+        filter: `product_id=eq.${productId}`,
       },
-      (payload) => {
-        console.log('PRODUCT REVIEW REALTIME:', payload);
+      async () => {
+        console.log('Review changed - refreshing reviews');
 
-        refreshReviews(product.id);
+        await refreshReviews(productId);
       },
     )
+
+    // Listen for the product's rating/review_count changes
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'products',
+        filter: `id=eq.${productId}`,
+      },
+      (payload) => {
+        console.log('Product updated:', payload);
+
+        setProduct((currentProduct) => {
+          if (!currentProduct) {
+            return currentProduct;
+          }
+
+          return {
+            ...currentProduct,
+            ...payload.new,
+          };
+        });
+      },
+    )
+
     .subscribe((status) => {
-      console.log('PRODUCT REVIEW REALTIME STATUS:', status);
+      console.log(
+        `Product realtime status for ${productId}:`,
+        status,
+      );
     });
 
   return () => {

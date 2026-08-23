@@ -445,40 +445,16 @@ Deno.serve(async (req) => {
       error: updateError,
     } = await supabase
       .from('orders')
-      .update({
-        payment_status: 'paid',
-
-        /*
-         * If your store uses "processing" for
-         * newly paid orders, change this to:
-         *
-         * status: 'processing'
-         *
-         * For now we follow your requested
-         * payment flow and use "paid".
-         */
-        status: 'paid',
-
-        paid_at:
-          new Date().toISOString(),
-
-        payment_method:
-          paymentMethod,
-
-        paystack_transaction_id:
-          Number(verifiedTransaction.id),
-
-        payment_reference:
-          reference,
-
-        /*
-         * Keep payment_ref synchronized too
-         * because your existing database appears
-         * to use both fields.
-         */
-        payment_ref:
-          reference,
-      })
+     .update({
+  payment_status: 'paid',
+  payment_reference: reference,
+  payment_ref: reference,
+  paid_at: new Date().toISOString(),
+  payment_method:
+    verifiedTransaction.channel ?? null,
+  paystack_transaction_id:
+    verifiedTransaction.id ?? null,
+})
       .eq('id', order.id);
 
     if (updateError) {

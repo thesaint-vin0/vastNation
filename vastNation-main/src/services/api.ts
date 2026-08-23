@@ -243,15 +243,17 @@ export async function updateOrderPayment(
   orderId: string,
   paymentRef: string,
   paymentStatus: string,
-  orderStatus: string,
 ): Promise<void> {
   const { error } = await supabase
     .from('orders')
-    .update({ payment_ref: paymentRef, payment_status: paymentStatus, status: orderStatus })
+    .update({
+      payment_ref: paymentRef,
+      payment_status: paymentStatus,
+    })
     .eq('id', orderId);
+
   if (error) throw error;
 }
-
 export async function recordPayment(payment: Omit<Payment, 'id' | 'created_at'>): Promise<void> {
   const { error } = await supabase.from('payments').insert(payment);
   if (error) throw error;

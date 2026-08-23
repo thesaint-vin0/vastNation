@@ -45,7 +45,7 @@ export default function Checkout() {
   const { toast } = useToast();
 
   function calculateShippingSafe(sub: number): number {
-    return sub >= 100000 ? 0 : 2500;
+    return sub >= 100 ? 0 : 2500;
   }
 
   const state = (location.state as CheckoutState) ?? {

@@ -29,7 +29,7 @@ export default function Register() {
     setLoading(true);
     try {
       await signUp(email, password, fullName);
-      toast('Account created! Welcome to Vast Nation.');
+      toast('Account created! Check Your email for Confirmation link. Welcome to Vast Nation.');
       navigate('/dashboard');
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Registration failed', 'error');

@@ -73,8 +73,8 @@ type Tab =
 
 type OrderStatus =
   | 'pending'
-  | 'paid'
-  | 'shipped'
+  | 'processing'
+  | 'shipping'
   | 'delivered'
   | 'cancelled';
 
@@ -139,8 +139,8 @@ const PRODUCT_FLAGS: ProductFlag[] = [
 
 const ORDER_STATUSES: OrderStatus[] = [
   'pending',
-  'paid',
-  'shipped',
+  'processing',
+  'shipping',
   'delivered',
   'cancelled',
 ];
@@ -1342,22 +1342,17 @@ export default function Admin() {
    */
 
   const totalRevenue =
-    orders
-      .filter(
-        (order) =>
-          order.payment_status ===
-            'paid' ||
-          order.status === 'paid' ||
-          order.status ===
-            'delivered',
-      )
-      .reduce(
-        (sum, order) =>
-          sum +
-          Number(order.total || 0),
-        0,
-      );
-
+  orders
+    .filter(
+      (order) =>
+        order.payment_status === 'paid',
+    )
+    .reduce(
+      (sum, order) =>
+        sum +
+        Number(order.total || 0),
+      0,
+    );
   const totalOrders =
     orders.length;
 
@@ -1371,14 +1366,11 @@ export default function Admin() {
   const totalProducts =
     products.length;
 
-  const paidOrders =
-    orders.filter(
-      (order) =>
-        order.payment_status ===
-          'paid' ||
-        order.status === 'paid',
-    ).length;
-
+const paidOrders =
+  orders.filter(
+    (order) =>
+      order.payment_status === 'paid',
+  ).length;
   const pendingPayments =
     orders.filter(
       (order) =>

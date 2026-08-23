@@ -70,19 +70,32 @@ export type Order = {
   id: string;
   user_id: string;
   order_number: string;
-  status: string;
+
+  status:
+    | 'pending'
+    | 'processing'
+    | 'shipping'
+    | 'delivered'
+    | 'cancelled';
+
   subtotal: number;
   discount: number;
   shipping: number;
   total: number;
+
   coupon_code: string | null;
   shipping_address: Record<string, unknown> | null;
   delivery_method: string;
 
-   // Payment
   payment_ref: string | null;
   payment_reference?: string | null;
-  payment_status: string;
+
+  payment_status:
+    | 'pending'
+    | 'paid'
+    | 'failed'
+    | 'refunded';
+
   paid_at?: string | null;
   payment_method?: string | null;
   paystack_transaction_id?: number | null;

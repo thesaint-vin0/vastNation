@@ -204,14 +204,37 @@ export default function Dashboard() {
                           <p className="text-xs text-ink-400">{formatDate(order.created_at)}</p>
                         </div>
                         <div className="flex items-center gap-4">
-                          <span className={classNames(
-                            'text-xs font-medium px-3 py-1 rounded-full',
-                            order.status === 'paid' || order.status === 'delivered' ? 'bg-green-500/20 text-green-400' :
-                            order.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
-                            'bg-red-500/20 text-red-400',
-                          )}>
-                            {order.status}
-                          </span>
+                         <span
+  className={classNames(
+    'text-xs font-medium px-3 py-1 rounded-full',
+    order.status === 'delivered'
+      ? 'bg-green-500/20 text-green-400'
+      : order.status === 'shipping'
+        ? 'bg-blue-500/20 text-blue-400'
+        : order.status === 'processing'
+          ? 'bg-purple-500/20 text-purple-400'
+          : order.status === 'pending'
+            ? 'bg-yellow-500/20 text-yellow-400'
+            : 'bg-red-500/20 text-red-400',
+  )}
+>
+  {order.status}
+</span>
+
+<span
+  className={classNames(
+    'text-xs font-medium px-3 py-1 rounded-full',
+    order.payment_status === 'paid'
+      ? 'bg-green-500/20 text-green-400'
+      : order.payment_status === 'pending'
+        ? 'bg-yellow-500/20 text-yellow-400'
+        : order.payment_status === 'refunded'
+          ? 'bg-purple-500/20 text-purple-400'
+          : 'bg-red-500/20 text-red-400',
+  )}
+>
+  Payment: {order.payment_status}
+</span>
                           <span className="text-sm font-bold text-gold-400">{formatNaira(order.total)}</span>
                         </div>
                       </div>
