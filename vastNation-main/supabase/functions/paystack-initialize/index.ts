@@ -80,13 +80,13 @@ serve(async (req) => {
      * ==========================================================
      */
 
-    const {
-      email,
-      amount,
-      orderId,
-      callback_url,
-    } = await req.json();
-
+   const {
+  email,
+  amount,
+  orderId,
+  reference,
+  callback_url,
+} = await req.json();
     /*
      * Validate required fields
      */
@@ -142,8 +142,20 @@ serve(async (req) => {
      * ==========================================================
      */
 
-    const reference =
-      `VN-${orderId}-${crypto.randomUUID()}`;
+    if (!reference) {
+  return new Response(
+    JSON.stringify({
+      error: 'Payment reference is required.',
+    }),
+    {
+      status: 400,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json',
+      },
+    },
+  );
+}
 
     /*
      * ==========================================================

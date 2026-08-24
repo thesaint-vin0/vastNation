@@ -229,10 +229,11 @@ export default function Checkout() {
        */
 
       const payment = await initializePaystackPayment(
-        customerInfo.email.trim(),
-        state.total,
-        order.id,
-      );
+  customerInfo.email.trim(),
+  state.total,
+  order.id,
+  localReference,
+);
 
       /*
        * Make sure Paystack returned a valid checkout URL.

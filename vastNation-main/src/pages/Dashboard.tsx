@@ -7,6 +7,7 @@ import { useWishlist } from '../context/WishlistContext';
 import { useToast } from '../context/ToastContext';
 import { getOrders, getOrderItems, getAddresses, getPayments, updateProfile, addAddress, deleteAddress } from '../services/api';
 import { formatNaira, formatDate, classNames } from '../utils/helpers';
+import { supabase } from '../lib/supabase';
 import type { Order, OrderItem, Address, Payment } from '../types';
 
 type Tab = 'dashboard' | 'profile' | 'orders' | 'wishlist' | 'addresses' | 'payments' | 'settings';
@@ -54,6 +55,82 @@ export default function Dashboard() {
       setPhone(profile.phone ?? '');
     }
   }, [user, profile]);
+
+
+  useEffect(() => {
+  if (!user?.id) return;
+
+  const channel = supabase
+    .channel(`customer-orders-${user.id}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'orders',
+        filter: `user_id=eq.${user.id}`,
+      },
+      (payload) => {
+        console.log(
+          'CUSTOMER ORDER REALTIME:',
+          payload
+        );
+
+        if (payload.eventType === 'INSERT') {
+          const newOrder = payload.new as Order;
+
+          setOrders((currentOrders) => {
+            // Prevent duplicates
+            if (
+              currentOrders.some(
+                (order) => order.id === newOrder.id
+              )
+            ) {
+              return currentOrders;
+            }
+
+            return [newOrder, ...currentOrders];
+          });
+        }
+
+        if (payload.eventType === 'UPDATE') {
+          const updatedOrder = payload.new as Order;
+
+          setOrders((currentOrders) =>
+            currentOrders.map((order) =>
+              order.id === updatedOrder.id
+                ? {
+                    ...order,
+                    ...updatedOrder,
+                  }
+                : order
+            )
+          );
+        }
+
+        if (payload.eventType === 'DELETE') {
+          const deletedOrder = payload.old as Order;
+
+          setOrders((currentOrders) =>
+            currentOrders.filter(
+              (order) =>
+                order.id !== deletedOrder.id
+            )
+          );
+        }
+      }
+    )
+    .subscribe((status) => {
+      console.log(
+        `CUSTOMER ORDER REALTIME STATUS: ${status}`
+      );
+    });
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [user?.id]);
+
 
   if (!user) return <Navigate to="/login" replace />;
 
@@ -196,50 +273,65 @@ export default function Dashboard() {
                     </Link>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {orders.slice(0, 3).map((order) => (
-                      <div key={order.id} className="glass rounded-xl p-4 flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-white font-mono">{order.order_number}</p>
-                          <p className="text-xs text-ink-400">{formatDate(order.created_at)}</p>
-                        </div>
-                        <div className="flex items-center gap-4">
-                         <span
-  className={classNames(
-    'text-xs font-medium px-3 py-1 rounded-full',
-    order.status === 'delivered'
-      ? 'bg-green-500/20 text-green-400'
-      : order.status === 'shipping'
-        ? 'bg-blue-500/20 text-blue-400'
-        : order.status === 'processing'
-          ? 'bg-purple-500/20 text-purple-400'
-          : order.status === 'pending'
-            ? 'bg-yellow-500/20 text-yellow-400'
-            : 'bg-red-500/20 text-red-400',
-  )}
->
-  {order.status}
-</span>
+                                    <div className="space-y-3">
+                      {orders.slice(0, 3).map((order) => (
+                        <div
+                          key={order.id}
+                          className="glass rounded-xl p-4 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="text-sm font-medium text-white font-mono">
+                              {order.order_number}
+                            </p>
 
-<span
-  className={classNames(
-    'text-xs font-medium px-3 py-1 rounded-full',
-    order.payment_status === 'paid'
-      ? 'bg-green-500/20 text-green-400'
-      : order.payment_status === 'pending'
-        ? 'bg-yellow-500/20 text-yellow-400'
-        : order.payment_status === 'refunded'
-          ? 'bg-purple-500/20 text-purple-400'
-          : 'bg-red-500/20 text-red-400',
-  )}
->
-  Payment: {order.payment_status}
-</span>
-                          <span className="text-sm font-bold text-gold-400">{formatNaira(order.total)}</span>
+                            <p className="text-xs text-ink-400">
+                              {formatDate(order.created_at)}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-4">
+                            {/* ORDER STATUS */}
+                            <span
+                              className={classNames(
+                                'text-xs font-medium px-3 py-1 rounded-full',
+                                order.status === 'delivered'
+                                  ? 'bg-green-500/20 text-green-400'
+                                  : order.status === 'shipping'
+                                    ? 'bg-blue-500/20 text-blue-400'
+                                    : order.status === 'processing'
+                                      ? 'bg-purple-500/20 text-purple-400'
+                                      : order.status === 'pending'
+                                        ? 'bg-yellow-500/20 text-yellow-400'
+                                        : 'bg-red-500/20 text-red-400',
+                              )}
+                            >
+                              {order.status}
+                            </span>
+
+                            {/* PAYMENT STATUS */}
+                            <span
+                              className={classNames(
+                                'text-xs font-medium px-3 py-1 rounded-full',
+                                order.payment_status === 'paid'
+                                  ? 'bg-green-500/20 text-green-400'
+                                  : order.payment_status === 'pending'
+                                    ? 'bg-yellow-500/20 text-yellow-400'
+                                    : order.payment_status === 'refunded'
+                                      ? 'bg-purple-500/20 text-purple-400'
+                                      : 'bg-red-500/20 text-red-400',
+                              )}
+                            >
+                              Payment: {order.payment_status}
+                            </span>
+
+                            {/* ORDER TOTAL */}
+                            <span className="text-sm font-bold text-gold-400">
+                              {formatNaira(order.total)}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
                 )}
               </div>
             </motion.div>
@@ -293,7 +385,8 @@ export default function Dashboard() {
                         <div className="flex items-center gap-3">
                           <span className={classNames(
                             'text-xs font-medium px-3 py-1 rounded-full',
-                            order.status === 'paid' || order.status === 'delivered' ? 'bg-green-500/20 text-green-400' :
+                            order.status === 'delivered'
+  ? 'bg-green-500/20 text-green-400'
                             order.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
                             'bg-red-500/20 text-red-400',
                           )}>{order.status}</span>

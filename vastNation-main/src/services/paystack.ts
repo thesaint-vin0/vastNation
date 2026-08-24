@@ -10,16 +10,18 @@ export async function initializePaystackPayment(
   email: string,
   amount: number,
   orderId: string,
+  reference: string,
 ) {
   const { data, error } =
     await supabase.functions.invoke(
       'paystack-initialize',
       {
         body: {
-          email,
-          amount,
-          orderId,
-        },
+  email,
+  amount,
+  orderId,
+  reference,
+},
       },
     );
 
