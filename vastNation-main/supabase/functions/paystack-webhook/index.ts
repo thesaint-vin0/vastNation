@@ -309,16 +309,67 @@ Deno.serve(async (req) => {
     /*
      * Find the order.
      */
-    const { data: order, error: orderError } =
-      await supabase
-        .from('orders')
-        .select(
-          'id, total, payment_status, payment_reference, payment_ref',
-        )
-        .or(
-          `payment_reference.eq.${reference},payment_ref.eq.${reference}`,
-        )
-        .maybeSingle();
+   const metadata =
+  verifiedTransaction.metadata ?? {};
+
+const metadataOrderId =
+  typeof metadata === 'object' &&
+  metadata !== null &&
+  'order_id' in metadata
+    ? String(metadata.order_id)
+    : null;
+
+let order = null;
+let orderError = null;
+
+/*
+ * ============================================================
+ * FIRST: FIND ORDER USING PAYSTACK METADATA
+ * ============================================================
+ *
+ * Paystack initialization sends:
+ *
+ * metadata: {
+ *   order_id: orderId
+ * }
+ *
+ * This is the most reliable way to connect
+ * the Paystack transaction to the order.
+ */
+
+if (metadataOrderId) {
+  const result = await supabase
+    .from('orders')
+    .select(
+      'id, total, payment_status, payment_reference, payment_ref',
+    )
+    .eq('id', metadataOrderId)
+    .maybeSingle();
+
+  order = result.data;
+  orderError = result.error;
+}
+
+/*
+ * ============================================================
+ * FALLBACK: FIND USING PAYSTACK REFERENCE
+ * ============================================================
+ */
+
+if (!order && !orderError) {
+  const result = await supabase
+    .from('orders')
+    .select(
+      'id, total, payment_status, payment_reference, payment_ref',
+    )
+    .or(
+      `payment_reference.eq.${reference},payment_ref.eq.${reference}`,
+    )
+    .maybeSingle();
+
+  order = result.data;
+  orderError = result.error;
+}
 
     if (orderError) {
       console.error(

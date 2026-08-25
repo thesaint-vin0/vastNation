@@ -16,17 +16,17 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
 import { createOrder } from '../services/api';
+import { initializePaystackPayment } from '../services/paystack';
 
 import {
   formatNaira,
   generateOrderNumber,
-  generateReference,
   classNames,
 } from '../utils/helpers';
 
-import type { Coupon } from '../types';
+import { supabase } from '../lib/supabase';
 
-import { initializePaystackPayment } from '../services/paystack';
+import type { Coupon } from '../types';
 
 type CheckoutState = {
   coupon: Coupon | null;
@@ -40,30 +40,42 @@ export default function Checkout() {
   const location = useLocation();
   const navigate = useNavigate();
 
+  /*
+   * ============================================================
+   * CONTEXT
+   * ============================================================
+   */
+
   const { items, subtotal } = useCart();
   const { user } = useAuth();
   const { toast } = useToast();
 
-  function calculateShippingSafe(sub: number): number {
-    return sub >= 100 ? 0 : 2500;
-  }
-
-  const state = (location.state as CheckoutState) ?? {
-    coupon: null,
-    deliveryMethod: 'standard',
-    discount: 0,
-    shipping: calculateShippingSafe(subtotal),
-    total: subtotal + calculateShippingSafe(subtotal),
-  };
+  /*
+   * ============================================================
+   * CHECKOUT STATE
+   * ============================================================
+   */
 
   const [step, setStep] = useState(1);
   const [processing, setProcessing] = useState(false);
+
+  /*
+   * ============================================================
+   * CUSTOMER INFORMATION
+   * ============================================================
+   */
 
   const [customerInfo, setCustomerInfo] = useState({
     fullName: user?.email ?? '',
     email: user?.email ?? '',
     phone: '',
   });
+
+  /*
+   * ============================================================
+   * SHIPPING ADDRESS
+   * ============================================================
+   */
 
   const [shippingAddress, setShippingAddress] = useState({
     line1: '',
@@ -76,76 +88,176 @@ export default function Checkout() {
 
   /*
    * ============================================================
+   * CART / CHECKOUT STATE
+   * ============================================================
+   */
+
+  const incomingState = location.state as CheckoutState | null;
+
+  const discount = incomingState?.discount ?? 0;
+
+  const deliveryMethod =
+    incomingState?.deliveryMethod ?? 'standard';
+
+  /*
+   * ============================================================
+   * SHIPPING CALCULATION
+   * ============================================================
+   *
+   * ₦100,000 or more = FREE SHIPPING
+   *
+   * Below ₦100,000 = ₦2,500
+   */
+
+  const calculateShippingSafe = (sub: number): number => {
+    return sub >= 100000 ? 0 : 2500;
+  };
+
+  const shipping = calculateShippingSafe(subtotal);
+
+  const total = Math.max(
+    0,
+    subtotal - discount + shipping,
+  );
+
+  /*
+   * ============================================================
    * PAY FOR ORDER
    * ============================================================
    *
    * Payment flow:
    *
-   * 1. Validate user
-   * 2. Validate customer information
-   * 3. Validate shipping information
-   * 4. Create pending order in Supabase
-   * 5. Initialize Paystack through the Supabase Edge Function
-   * 6. Redirect customer to Paystack
+   * 1. Validate customer
+   * 2. Validate shipping
+   * 3. Create pending order
+   * 4. Call Supabase Edge Function
+   * 5. Edge Function initializes Paystack
+   * 6. Receive REAL Paystack reference
+   * 7. Save REAL reference to order
+   * 8. Redirect customer to Paystack
    *
-   * The browser does NOT mark the order as paid.
+   * The browser NEVER marks the order as paid.
    *
-   * The Paystack webhook is responsible for confirming
-   * successful payment server-side.
+   * The webhook is responsible for:
+   *
+   * payment_status = paid
+   * payment_reference
+   * payment_ref
+   * paid_at
+   * payment_method
+   * paystack_transaction_id
    */
+
   const handlePay = async () => {
+    if (processing) {
+      return;
+    }
+
+    /*
+     * ==========================================================
+     * AUTHENTICATION
+     * ==========================================================
+     */
+
     if (!user) {
-      toast('Please sign in to complete your order', 'error');
+      toast(
+        'Please sign in to complete your order',
+        'error',
+      );
+
       navigate('/login');
       return;
     }
 
+    /*
+     * ==========================================================
+     * CUSTOMER VALIDATION
+     * ==========================================================
+     */
+
     if (!customerInfo.fullName.trim()) {
-      toast('Please enter your full name', 'error');
+      toast(
+        'Please enter your full name',
+        'error',
+      );
+
       setStep(1);
       return;
     }
 
     if (!customerInfo.email.trim()) {
-      toast('Please enter your email address', 'error');
+      toast(
+        'Please enter your email address',
+        'error',
+      );
+
       setStep(1);
       return;
     }
 
     if (!customerInfo.phone.trim()) {
-      toast('Please enter your phone number', 'error');
+      toast(
+        'Please enter your phone number',
+        'error',
+      );
+
       setStep(1);
       return;
     }
 
+    /*
+     * ==========================================================
+     * SHIPPING VALIDATION
+     * ==========================================================
+     */
+
     if (!shippingAddress.line1.trim()) {
-      toast('Please enter your delivery address', 'error');
+      toast(
+        'Please enter your delivery address',
+        'error',
+      );
+
       setStep(2);
       return;
     }
 
     if (!shippingAddress.city.trim()) {
-      toast('Please enter your city', 'error');
+      toast(
+        'Please enter your city',
+        'error',
+      );
+
       setStep(2);
       return;
     }
 
     if (!shippingAddress.state.trim()) {
-      toast('Please enter your state', 'error');
+      toast(
+        'Please enter your state',
+        'error',
+      );
+
       setStep(2);
       return;
     }
 
+    /*
+     * ==========================================================
+     * CART VALIDATION
+     * ==========================================================
+     */
+
     if (items.length === 0) {
-      toast('Your cart is empty', 'error');
+      toast(
+        'Your cart is empty',
+        'error',
+      );
+
       navigate('/shop');
       return;
     }
 
     setProcessing(true);
-
-    const orderNumber = generateOrderNumber();
-    const localReference = generateReference();
 
     try {
       /*
@@ -154,6 +266,8 @@ export default function Checkout() {
        * ========================================================
        */
 
+      const orderNumber = generateOrderNumber();
+
       const order = await createOrder(
         {
           user_id: user.id,
@@ -161,35 +275,39 @@ export default function Checkout() {
           order_number: orderNumber,
 
           /*
-           * The order starts as pending.
+           * Customer order status.
+           *
+           * Payment status is separate.
            */
           status: 'pending',
 
           subtotal,
 
-          discount: state.discount,
+          discount,
 
-          shipping: state.shipping,
+          shipping,
 
-          total: state.total,
+          total,
 
-          coupon_code: state.coupon?.code ?? null,
+          coupon_code:
+            incomingState?.coupon?.code ?? null,
 
           shipping_address: {
             ...shippingAddress,
             ...customerInfo,
           } as unknown as Record<string, unknown>,
 
-          delivery_method: state.deliveryMethod,
+          delivery_method: deliveryMethod,
 
           /*
-           * This reference allows the order to be
-           * associated with the payment initialization.
+           * IMPORTANT:
            *
-           * The Paystack reference returned by the Edge
-           * Function remains the payment source of truth.
+           * Do NOT generate a fake/local Paystack reference.
+           *
+           * The Edge Function generates the real
+           * Paystack reference.
            */
-          payment_ref: localReference,
+          payment_ref: null,
 
           /*
            * Payment has not happened yet.
@@ -197,20 +315,32 @@ export default function Checkout() {
           payment_status: 'pending',
         },
 
+        /*
+         * ORDER ITEMS
+         */
+
         items.map((item) => ({
           product_id: item.product.id,
+
           name: item.product.name,
-          image_url: item.product.images[0] ?? null,
+
+          image_url:
+            item.product.images[0] ?? null,
+
           size: item.size,
+
           color: item.color,
+
           price: item.product.price,
+
           quantity: item.quantity,
         })),
       );
 
       /*
-       * Make sure the order was actually created.
+       * Make sure order creation succeeded.
        */
+
       if (!order?.id) {
         throw new Error(
           'Order was created but no order ID was returned.',
@@ -221,46 +351,91 @@ export default function Checkout() {
        * ========================================================
        * STEP 2 — INITIALIZE PAYSTACK
        * ========================================================
-       *
-       * The Supabase Edge Function communicates with Paystack
-       * using the secret key.
-       *
-       * The secret key must NEVER be exposed in this component.
        */
 
-      const payment = await initializePaystackPayment(
-  customerInfo.email.trim(),
-  state.total,
-  order.id,
-  localReference,
-);
+      const payment =
+        await initializePaystackPayment(
+          customerInfo.email.trim(),
+          total,
+          order.id,
+        );
 
       /*
-       * Make sure Paystack returned a valid checkout URL.
+       * ========================================================
+       * VALIDATE PAYSTACK RESPONSE
+       * ========================================================
        */
+
       if (!payment?.authorization_url) {
         throw new Error(
           'Paystack did not return an authorization URL.',
         );
       }
 
+      if (!payment?.reference) {
+        throw new Error(
+          'Paystack did not return a payment reference.',
+        );
+      }
+
       /*
        * ========================================================
-       * STEP 3 — REDIRECT TO PAYSTACK
+       * STEP 3 — SAVE REAL PAYSTACK REFERENCE
        * ========================================================
        *
-       * Do NOT:
+       * This is extremely important.
        *
-       * - mark the order as paid
-       * - clear the cart
-       * - update payment_status
-       * - create a successful payment record
+       * Paystack generates a reference such as:
        *
-       * Those actions should happen after Paystack confirms
-       * payment through the webhook.
+       * VN-ORDER-ID-RANDOM-ID
+       *
+       * The webhook receives this exact reference.
+       *
+       * We therefore store it in both:
+       *
+       * payment_ref
+       * payment_reference
        */
 
-      window.location.href = payment.authorization_url;
+      const {
+        error: referenceUpdateError,
+      } = await supabase
+        .from('orders')
+        .update({
+          payment_ref: payment.reference,
+          payment_reference: payment.reference,
+        })
+        .eq('id', order.id);
+
+      if (referenceUpdateError) {
+        console.error(
+          'Failed to save Paystack reference:',
+          referenceUpdateError,
+        );
+
+        throw new Error(
+          'Unable to link your payment to the order. Please try again.',
+        );
+      }
+
+      /*
+       * ========================================================
+       * STEP 4 — REDIRECT TO PAYSTACK
+       * ========================================================
+       *
+       * DO NOT:
+       *
+       * - mark payment as paid
+       * - change payment_status
+       * - clear cart
+       * - create payment history
+       *
+       * The webhook does that after Paystack confirms
+       * the transaction.
+       */
+
+      window.location.href =
+        payment.authorization_url;
     } catch (error) {
       console.error(
         'Paystack payment initialization failed:',
@@ -268,7 +443,9 @@ export default function Checkout() {
       );
 
       toast(
-        'Unable to start payment. Please try again.',
+        error instanceof Error
+          ? error.message
+          : 'Unable to start payment. Please try again.',
         'error',
       );
 
@@ -290,7 +467,8 @@ export default function Checkout() {
         </h1>
 
         <p className="text-ink-400 mb-6">
-          Add some products to your cart before checking out.
+          Add some products to your cart before
+          checking out.
         </p>
 
         <Link
@@ -329,7 +507,7 @@ export default function Checkout() {
 
   /*
    * ============================================================
-   * MAIN CHECKOUT UI
+   * MAIN CHECKOUT
    * ============================================================
    */
 
@@ -386,11 +564,13 @@ export default function Checkout() {
       </div>
 
       <div className="grid lg:grid-cols-3 gap-8">
+
         {/* =====================================================
-            FORM
+            CHECKOUT FORM
         ====================================================== */}
 
         <div className="lg:col-span-2">
+
           {/* ===================================================
               STEP 1 — INFORMATION
           ==================================================== */}
@@ -412,7 +592,8 @@ export default function Checkout() {
               </h2>
 
               <div className="space-y-4">
-                {/* Full Name */}
+
+                {/* FULL NAME */}
 
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -433,7 +614,7 @@ export default function Checkout() {
                   />
                 </div>
 
-                {/* Email */}
+                {/* EMAIL */}
 
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -454,7 +635,7 @@ export default function Checkout() {
                   />
                 </div>
 
-                {/* Phone */}
+                {/* PHONE */}
 
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -479,9 +660,9 @@ export default function Checkout() {
               <button
                 onClick={() => setStep(2)}
                 disabled={
-                  !customerInfo.fullName ||
-                  !customerInfo.email ||
-                  !customerInfo.phone
+                  !customerInfo.fullName.trim() ||
+                  !customerInfo.email.trim() ||
+                  !customerInfo.phone.trim()
                 }
                 className="btn-gold rounded-lg px-6 py-3 text-sm uppercase tracking-wider mt-6 disabled:opacity-40"
               >
@@ -513,7 +694,8 @@ export default function Checkout() {
               </h2>
 
               <div className="space-y-4">
-                {/* Address Line 1 */}
+
+                {/* ADDRESS LINE 1 */}
 
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -534,7 +716,7 @@ export default function Checkout() {
                   />
                 </div>
 
-                {/* Address Line 2 */}
+                {/* ADDRESS LINE 2 */}
 
                 <div>
                   <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
@@ -555,9 +737,10 @@ export default function Checkout() {
                   />
                 </div>
 
-                {/* City + State */}
+                {/* CITY / STATE */}
 
                 <div className="grid grid-cols-2 gap-4">
+
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                       City
@@ -595,11 +778,13 @@ export default function Checkout() {
                       placeholder="Lagos State"
                     />
                   </div>
+
                 </div>
 
-                {/* Postal Code + Country */}
+                {/* POSTAL / COUNTRY */}
 
                 <div className="grid grid-cols-2 gap-4">
+
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
                       Postal Code
@@ -632,10 +817,14 @@ export default function Checkout() {
                       readOnly
                     />
                   </div>
+
                 </div>
               </div>
 
+              {/* NAVIGATION */}
+
               <div className="flex gap-3 mt-6">
+
                 <button
                   onClick={() => setStep(1)}
                   className="btn-outline rounded-lg px-6 py-3 text-sm uppercase tracking-wider"
@@ -646,9 +835,9 @@ export default function Checkout() {
                 <button
                   onClick={() => setStep(3)}
                   disabled={
-                    !shippingAddress.line1 ||
-                    !shippingAddress.city ||
-                    !shippingAddress.state
+                    !shippingAddress.line1.trim() ||
+                    !shippingAddress.city.trim() ||
+                    !shippingAddress.state.trim()
                   }
                   className="btn-gold rounded-lg px-6 py-3 text-sm uppercase tracking-wider disabled:opacity-40"
                 >
@@ -656,6 +845,7 @@ export default function Checkout() {
 
                   <ChevronRight className="w-4 h-4 inline ml-1" />
                 </button>
+
               </div>
             </motion.div>
           )}
@@ -680,10 +870,11 @@ export default function Checkout() {
                 Payment Method
               </h2>
 
-              {/* Paystack */}
+              {/* PAYSTACK */}
 
               <div className="border border-gold-400/40 rounded-xl p-4 mb-6 bg-gold-400/5">
                 <div className="flex items-center gap-3">
+
                   <div className="w-10 h-10 rounded-lg bg-gold-400/20 flex items-center justify-center">
                     <CreditCard className="w-5 h-5 text-gold-400" />
                   </div>
@@ -699,12 +890,14 @@ export default function Checkout() {
                   </div>
 
                   <CheckCircle className="w-5 h-5 text-gold-400 ml-auto" />
+
                 </div>
               </div>
 
-              {/* Security Message */}
+              {/* SECURITY */}
 
               <div className="flex items-start gap-3 p-4 rounded-xl bg-ink-900/50 mb-6">
+
                 <Lock className="w-4 h-4 text-gold-400 mt-0.5 shrink-0" />
 
                 <p className="text-xs text-ink-400">
@@ -713,11 +906,43 @@ export default function Checkout() {
                   Payment is verified server-side before
                   your order is confirmed.
                 </p>
+
               </div>
 
-              {/* Buttons */}
+              {/* PAYMENT SUMMARY */}
+
+              <div className="rounded-xl border border-white/10 p-4 mb-6">
+
+                <div className="flex justify-between text-sm mb-2">
+
+                  <span className="text-ink-400">
+                    Amount to pay
+                  </span>
+
+                  <span className="text-white font-bold">
+                    {formatNaira(total)}
+                  </span>
+
+                </div>
+
+                <div className="flex justify-between text-xs">
+
+                  <span className="text-ink-500">
+                    Payment status
+                  </span>
+
+                  <span className="text-yellow-400">
+                    Pending until Paystack confirms
+                  </span>
+
+                </div>
+
+              </div>
+
+              {/* BUTTONS */}
 
               <div className="flex gap-3">
+
                 <button
                   onClick={() => setStep(2)}
                   disabled={processing}
@@ -751,13 +976,15 @@ export default function Checkout() {
                     <>
                       <Lock className="w-4 h-4" />
 
-                      Pay {formatNaira(state.total)}
+                      Pay {formatNaira(total)}
                     </>
                   )}
                 </button>
+
               </div>
             </motion.div>
           )}
+
         </div>
 
         {/* =====================================================
@@ -765,18 +992,25 @@ export default function Checkout() {
         ====================================================== */}
 
         <div className="lg:col-span-1">
+
           <div className="glass rounded-2xl p-6 sticky top-28">
+
             <h2 className="font-display text-xl font-bold text-white mb-6">
               Your Order
             </h2>
 
+            {/* PRODUCTS */}
+
             <div className="space-y-3 mb-6 max-h-64 overflow-y-auto">
+
               {items.map((item) => (
                 <div
                   key={`${item.product.id}-${item.size}-${item.color}`}
                   className="flex gap-3"
                 >
+
                   <div className="relative shrink-0">
+
                     <img
                       src={item.product.images[0]}
                       alt={item.product.name}
@@ -786,9 +1020,11 @@ export default function Checkout() {
                     <span className="absolute -top-1 -right-1 w-5 h-5 bg-gold-400 text-ink-950 text-[10px] font-bold rounded-full flex items-center justify-center">
                       {item.quantity}
                     </span>
+
                   </div>
 
                   <div className="flex-1 min-w-0">
+
                     <h4 className="text-xs font-medium text-white truncate">
                       {item.product.name}
                     </h4>
@@ -803,15 +1039,20 @@ export default function Checkout() {
                           item.quantity,
                       )}
                     </p>
+
                   </div>
+
                 </div>
               ))}
+
             </div>
 
-            {/* Price Breakdown */}
+            {/* PRICE BREAKDOWN */}
 
             <div className="space-y-2 py-4 border-t border-white/10">
+
               <div className="flex justify-between text-sm">
+
                 <span className="text-ink-400">
                   Subtotal
                 </span>
@@ -819,48 +1060,64 @@ export default function Checkout() {
                 <span className="text-white">
                   {formatNaira(subtotal)}
                 </span>
+
               </div>
 
-              {state.discount > 0 && (
+              {discount > 0 && (
                 <div className="flex justify-between text-sm">
+
                   <span className="text-green-400">
                     Discount
                   </span>
 
                   <span className="text-green-400">
-                    -{formatNaira(state.discount)}
+                    -{formatNaira(discount)}
                   </span>
+
                 </div>
               )}
 
               <div className="flex justify-between text-sm">
+
                 <span className="text-ink-400 flex items-center gap-1">
                   <Truck className="w-3.5 h-3.5" />
-
                   Shipping
                 </span>
 
                 <span className="text-white">
-                  {state.shipping === 0
+                  {shipping === 0
                     ? 'FREE'
-                    : formatNaira(state.shipping)}
+                    : formatNaira(shipping)}
                 </span>
+
               </div>
+
+              {subtotal >= 100000 && (
+                <p className="text-xs text-green-400 mt-2">
+                  Free shipping applied on orders of ₦100,000+
+                </p>
+              )}
+
             </div>
 
-            {/* Total */}
+            {/* TOTAL */}
 
             <div className="flex justify-between items-center pt-4 border-t border-white/10">
+
               <span className="font-bold text-white">
                 Total
               </span>
 
               <span className="text-2xl font-bold text-gold-400">
-                {formatNaira(state.total)}
+                {formatNaira(total)}
               </span>
+
             </div>
+
           </div>
+
         </div>
+
       </div>
     </div>
   );

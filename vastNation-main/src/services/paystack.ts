@@ -10,18 +10,16 @@ export async function initializePaystackPayment(
   email: string,
   amount: number,
   orderId: string,
-  reference: string,
 ) {
   const { data, error } =
     await supabase.functions.invoke(
       'paystack-initialize',
       {
         body: {
-  email,
-  amount,
-  orderId,
-  reference,
-},
+          email,
+          amount,
+          orderId,
+        },
       },
     );
 
@@ -31,7 +29,19 @@ export async function initializePaystackPayment(
 
   if (!data) {
     throw new Error(
-      'No payment response received',
+      'No payment response received.',
+    );
+  }
+
+  if (!data.authorization_url) {
+    throw new Error(
+      'Paystack authorization URL was not returned.',
+    );
+  }
+
+  if (!data.reference) {
+    throw new Error(
+      'Paystack payment reference was not returned.',
     );
   }
 
