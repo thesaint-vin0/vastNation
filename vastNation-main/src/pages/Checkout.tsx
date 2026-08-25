@@ -110,7 +110,7 @@ export default function Checkout() {
    */
 
   const calculateShippingSafe = (sub: number): number => {
-    return sub >= 100000 ? 0 : 2500;
+    return sub >= 100 ? 0 : 2500;
   };
 
   const shipping = calculateShippingSafe(subtotal);
