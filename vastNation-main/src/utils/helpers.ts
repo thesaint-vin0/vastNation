@@ -60,22 +60,8 @@ export function calculateDiscount(
   return Math.min(coupon.value, subtotal);
 }
 
-export type ShippingSettings = {
-  shipping_threshold: number;
-  default_shipping_fee: number;
-  express_shipping_fee: number;
-};
-
-export function calculateShipping(
-  subtotal: number,
-  deliveryMethod: string,
-  settings: ShippingSettings = {
-    shipping_threshold: 100000,
-    default_shipping_fee: 2500,
-    express_shipping_fee: 5000,
-  },
-): number {
-  if (deliveryMethod === 'express') return settings.express_shipping_fee;
-  if (subtotal >= settings.shipping_threshold) return 0;
-  return settings.default_shipping_fee;
+export function calculateShipping(subtotal: number, deliveryMethod: string): number {
+  if (deliveryMethod === 'express') return 5000;
+  if (subtotal >= 100) return 0;
+  return 2500;
 }

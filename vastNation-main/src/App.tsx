@@ -4,10 +4,10 @@ import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { WishlistProvider } from './context/WishlistContext';
 import { ToastProvider } from './context/ToastContext';
+import { ThemeProvider } from './context/ThemeContext';
 import MainLayout from './layouts/MainLayout';
 import Home from './pages/Home';
 import PaymentCallback from './pages/PaymentCallback';
-import AdminSettings from './pages/AdminSettings';
 
 const Shop = lazy(() => import('./pages/Shop'));
 const ProductDetails = lazy(() => import('./pages/ProductDetails'));
@@ -18,6 +18,7 @@ const Register = lazy(() => import('./pages/Register'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Admin = lazy(() => import('./pages/Admin'));
+const AdminSettings = lazy(() => import('./pages/AdminSettings'));
 const Contact = lazy(() => import('./pages/Contact'));
 const About = lazy(() => import('./pages/About'));
 const Wishlist = lazy(() => import('./pages/Wishlist'));
@@ -34,7 +35,8 @@ function PageLoader() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
         <CartProvider>
           <WishlistProvider>
             <ToastProvider>
@@ -66,7 +68,8 @@ export default function App() {
             </ToastProvider>
           </WishlistProvider>
         </CartProvider>
-      </AuthProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

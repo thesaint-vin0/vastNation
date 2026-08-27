@@ -37,7 +37,7 @@ import {
 } from '../utils/helpers';
 
 import { supabase } from '../lib/supabase';
-import AccountSettings from './AccountSettings';
+import { useTheme } from '../context/ThemeContext';
 
 import type {
   Order,
@@ -76,6 +76,7 @@ export default function Dashboard() {
 
   const { items: wishlistItems } = useWishlist();
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
 
   const [tab, setTab] = useState<Tab>('dashboard');
 
@@ -92,6 +93,46 @@ export default function Dashboard() {
   const [phone, setPhone] = useState('');
 
   const [savingProfile, setSavingProfile] = useState(false);
+
+  const [notificationSettings, setNotificationSettings] = useState({
+    order_updates: true,
+    payment_updates: true,
+    shipping_updates: true,
+    product_alerts: true,
+    newsletter: true,
+    promotions: true,
+  });
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  const saveUserSettings = useCallback(async (patch: Partial<typeof notificationSettings>) => {
+    if (!user?.id) return;
+    setSavingSettings(true);
+    const next = { ...notificationSettings, ...patch };
+    const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, ...next, theme }, { onConflict: 'user_id' });
+    setSavingSettings(false);
+    if (error) toast('Could not save settings: ' + error.message, 'error');
+    else setNotificationSettings(next);
+  }, [user?.id, notificationSettings, theme, toast]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle().then(({ data }) => {
+      if (!data) return;
+      setNotificationSettings({
+        order_updates: data.order_updates ?? true, payment_updates: data.payment_updates ?? true,
+        shipping_updates: data.shipping_updates ?? true, product_alerts: data.product_alerts ?? true,
+        newsletter: data.newsletter ?? true, promotions: data.promotions ?? true,
+      });
+      if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') setTheme(data.theme);
+    });
+  }, [user?.id, setTheme]);
+
+  const changeTheme = async (next: 'light' | 'dark' | 'system') => {
+    setTheme(next);
+    if (!user?.id) return;
+    const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, ...notificationSettings, theme: next }, { onConflict: 'user_id' });
+    if (error) toast('Theme changed locally, but could not be saved.', 'error');
+  };
 
   const [showAddrForm, setShowAddrForm] = useState(false);
 
@@ -1979,7 +2020,37 @@ export default function Dashboard() {
           )}
 
           {/* SETTINGS */}
-          {tab === 'settings' && <AccountSettings />}
+
+          {tab === 'settings' && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+              <h1 className="font-display text-3xl font-bold text-white mb-6">Account Settings</h1>
+              <div className="glass rounded-2xl p-6 max-w-2xl space-y-8">
+                <div>
+                  <h3 className="text-sm font-semibold text-white mb-1">Appearance</h3>
+                  <p className="text-xs text-ink-400 mb-4">Choose how Vast Nation looks on this device.</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['light', 'dark', 'system'] as const).map((option) => (
+                      <button key={option} type="button" onClick={() => void changeTheme(option)} className={classNames('rounded-lg border px-3 py-3 text-sm capitalize transition', theme === option ? 'border-gold-400 bg-gold-400/10 text-gold-400' : 'border-white/10 text-ink-300 hover:border-white/30')}>{option}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="pt-6 border-t border-white/10">
+                  <h3 className="text-sm font-semibold text-white mb-1">Notifications</h3>
+                  <p className="text-xs text-ink-400 mb-3">Your choices are saved to your account.</p>
+                  {([['order_updates','Order updates'],['payment_updates','Payment updates'],['shipping_updates','Shipping and delivery'],['product_alerts','New product alerts'],['newsletter','Newsletter'],['promotions','Promotional offers']] as const).map(([key,label]) => (
+                    <label key={key} className="flex items-center justify-between py-3 border-b border-white/5 cursor-pointer">
+                      <span className="text-sm text-ink-300">{label}</span>
+                      <input type="checkbox" className="accent-gold-400 w-4 h-4" checked={notificationSettings[key]} disabled={savingSettings} onChange={(e) => void saveUserSettings({ [key]: e.target.checked })} />
+                    </label>
+                  ))}
+                </div>
+                <div className="pt-6 border-t border-white/10">
+                  <h3 className="text-sm font-semibold text-white mb-2">Danger Zone</h3>
+                  <button type="button" onClick={handleSignOut} className="text-sm text-red-400 hover:text-red-300 transition-colors flex items-center gap-2"><LogOut className="w-4 h-4" />Sign out of all devices</button>
+                </div>
+              </div>
+            </motion.div>
+          )}
         </div>
       </div>
     </div>

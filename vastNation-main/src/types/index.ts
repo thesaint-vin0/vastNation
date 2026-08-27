@@ -47,11 +47,7 @@ export type Coupon = {
   value: number;
   min_order: number;
   active: boolean;
-  starts_at: string | null;
   expires_at: string | null;
-  usage_limit: number | null;
-  per_user_limit: number | null;
-  usage_count: number;
   created_at: string;
 };
 

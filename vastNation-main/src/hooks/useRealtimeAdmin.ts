@@ -18,7 +18,6 @@ export function useRealtimeAdmin({
     const channel = supabase
       .channel('vast-nation-admin-realtime')
 
-      // Orders
       .on(
         'postgres_changes',
         {
@@ -32,7 +31,6 @@ export function useRealtimeAdmin({
         },
       )
 
-      // Customers / Profiles
       .on(
         'postgres_changes',
         {
@@ -46,7 +44,6 @@ export function useRealtimeAdmin({
         },
       )
 
-      // Reviews
       .on(
         'postgres_changes',
         {
@@ -60,19 +57,15 @@ export function useRealtimeAdmin({
         },
       )
 
-      // Coupons
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'coupons',
-        },
+        { event: '*', schema: 'public', table: 'coupons' },
         (payload) => {
           console.log('COUPON REALTIME:', payload);
           onCouponsChange?.();
         },
       )
+
 
       .subscribe((status) => {
         console.log(
@@ -82,7 +75,7 @@ export function useRealtimeAdmin({
       });
 
     return () => {
-      void supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
   }, [
     onOrdersChange,
