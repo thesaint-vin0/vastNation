@@ -37,6 +37,7 @@ import {
 } from '../utils/helpers';
 
 import { supabase } from '../lib/supabase';
+import AccountSettings from './AccountSettings';
 
 import type {
   Order,
@@ -1978,79 +1979,7 @@ export default function Dashboard() {
           )}
 
           {/* SETTINGS */}
-
-          {tab === 'settings' && (
-            <motion.div
-              initial={{
-                opacity: 0,
-                y: 20,
-              }}
-              animate={{
-                opacity: 1,
-                y: 0,
-              }}
-            >
-              <h1 className="font-display text-3xl font-bold text-white mb-6">
-                Account Settings
-              </h1>
-
-              <div className="glass rounded-2xl p-6 max-w-lg space-y-6">
-
-                <div>
-                  <h3 className="text-sm font-semibold text-white mb-2">
-                    Email Notifications
-                  </h3>
-
-                  <p className="text-xs text-ink-400 mb-3">
-                    Manage your email
-                    preferences
-                  </p>
-
-                  {[
-                    'Order updates',
-                    'New product alerts',
-                    'Newsletter',
-                    'Promotional offers',
-                  ].map((item) => (
-                    <label
-                      key={item}
-                      className="flex items-center gap-3 py-2 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        defaultChecked
-                        className="accent-gold-400 w-4 h-4"
-                      />
-
-                      <span className="text-sm text-ink-300">
-                        {item}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-
-                <div className="pt-4 border-t border-white/10">
-
-                  <h3 className="text-sm font-semibold text-white mb-2">
-                    Danger Zone
-                  </h3>
-
-                  <button
-                    type="button"
-                    onClick={
-                      handleSignOut
-                    }
-                    className="text-sm text-red-400 hover:text-red-300 transition-colors flex items-center gap-2"
-                  >
-                    <LogOut className="w-4 h-4" />
-
-                    Sign out of all
-                    devices
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          )}
+          {tab === 'settings' && <AccountSettings />}
         </div>
       </div>
     </div>

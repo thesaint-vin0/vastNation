@@ -1,632 +1,256 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const PAYSTACK_SECRET_KEY =
-  Deno.env.get('PAYSTACK_SECRET_KEY');
+const PAYSTACK_SECRET_KEY = Deno.env.get('PAYSTACK_SECRET_KEY');
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-const SUPABASE_URL =
-  Deno.env.get('SUPABASE_URL');
-
-const SUPABASE_SERVICE_ROLE_KEY =
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-
-if (!PAYSTACK_SECRET_KEY) {
-  throw new Error('PAYSTACK_SECRET_KEY is not configured');
+if (!PAYSTACK_SECRET_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('Required Paystack/Supabase secrets are not configured.');
 }
 
-if (!SUPABASE_URL) {
-  throw new Error('SUPABASE_URL is not configured');
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
-if (!SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error(
-    'SUPABASE_SERVICE_ROLE_KEY is not configured',
-  );
-}
-
-const supabase = createClient(
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
-);
-
-async function generateHmacSha512(
-  secret: string,
-  body: string,
-) {
+async function generateHmacSha512(secret: string, body: string) {
   const encoder = new TextEncoder();
-
   const key = await crypto.subtle.importKey(
     'raw',
     encoder.encode(secret),
-    {
-      name: 'HMAC',
-      hash: 'SHA-512',
-    },
+    { name: 'HMAC', hash: 'SHA-512' },
     false,
     ['sign'],
   );
-
   const signature = await crypto.subtle.sign(
     'HMAC',
     key,
     encoder.encode(body),
   );
 
-  return Array.from(
-    new Uint8Array(signature),
-  )
-    .map((byte) =>
-      byte.toString(16).padStart(2, '0'),
-    )
+  return Array.from(new Uint8Array(signature))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
 }
 
-function safeCompare(
-  a: string,
-  b: string,
-) {
-  if (a.length !== b.length) {
-    return false;
-  }
-
+function safeCompare(a: string, b: string) {
+  if (a.length !== b.length) return false;
   let result = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    result |=
-      a.charCodeAt(i) ^
-      b.charCodeAt(i);
+  for (let i = 0; i < a.length; i += 1) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
-
   return result === 0;
 }
 
 Deno.serve(async (req) => {
+  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+
   try {
-    /*
-     * Only accept POST requests.
-     */
-    if (req.method !== 'POST') {
-      return new Response(
-        JSON.stringify({
-          error: 'Method not allowed',
-        }),
-        {
-          status: 405,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
-    }
-
-    /*
-     * Read the raw body.
-     *
-     * IMPORTANT:
-     * We need the raw body to verify Paystack's
-     * HMAC SHA-512 signature.
-     */
     const rawBody = await req.text();
+    const signature = req.headers.get('x-paystack-signature');
 
-    const signature =
-      req.headers.get(
-        'x-paystack-signature',
-      );
+    if (!signature) return json({ error: 'Missing signature' }, 401);
 
-    if (!signature) {
-      console.error(
-        'Missing x-paystack-signature',
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: 'Missing signature',
-        }),
-        {
-          status: 401,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
-    }
-
-    /*
-     * Verify Paystack signature.
-     */
-    const expectedSignature =
-      await generateHmacSha512(
-        PAYSTACK_SECRET_KEY,
-        rawBody,
-      );
-
-    if (
-      !safeCompare(
-        signature,
-        expectedSignature,
-      )
-    ) {
-      console.error(
-        'Invalid Paystack signature',
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: 'Invalid signature',
-        }),
-        {
-          status: 401,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
-    }
-
-    /*
-     * Signature is valid.
-     */
-    const payload = JSON.parse(rawBody);
-
-    console.log(
-      'Paystack event:',
-      payload.event,
+    const expectedSignature = await generateHmacSha512(
+      PAYSTACK_SECRET_KEY,
+      rawBody,
     );
 
-    /*
-     * We primarily care about charge.success.
-     */
+    if (!safeCompare(signature, expectedSignature)) {
+      return json({ error: 'Invalid signature' }, 401);
+    }
+
+    const payload = JSON.parse(rawBody);
+
+    // Paystack can send many event types. Payment completion is handled here.
     if (payload.event !== 'charge.success') {
-      console.log(
-        'Ignoring Paystack event:',
-        payload.event,
-      );
-
-      return new Response(
-        JSON.stringify({
-          received: true,
-        }),
-        {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+      return json({ received: true });
     }
 
-    const transaction =
-      payload.data;
+    const transaction = payload.data;
+    const reference = transaction?.reference;
 
-    const reference =
-      transaction?.reference;
+    if (!reference) return json({ error: 'Missing transaction reference' }, 400);
 
-    if (!reference) {
-      console.error(
-        'Paystack event has no reference',
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: 'Missing transaction reference',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-          },
+    // Always verify the transaction directly with Paystack.
+    const verifyResponse = await fetch(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json',
         },
-      );
+      },
+    );
+
+    const verifyResult = await verifyResponse.json();
+
+    if (!verifyResponse.ok || !verifyResult.status) {
+      console.error('Paystack verification failed:', verifyResult);
+      return json({ error: 'Paystack verification failed' }, 400);
     }
 
-    /*
-     * IMPORTANT:
-     *
-     * Do not trust charge.success by itself.
-     *
-     * Verify the transaction directly with
-     * Paystack's API.
-     */
-    const verifyResponse =
-      await fetch(
-        `https://api.paystack.co/transaction/verify/${encodeURIComponent(
-          reference,
-        )}`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization:
-              `Bearer ${PAYSTACK_SECRET_KEY}`,
-            'Content-Type':
-              'application/json',
-          },
-        },
-      );
+    const verified = verifyResult.data;
 
-    const verifyResult =
-      await verifyResponse.json();
-
-    if (
-      !verifyResponse.ok ||
-      !verifyResult.status
-    ) {
-      console.error(
-        'Paystack verification failed:',
-        verifyResult,
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: 'Paystack verification failed',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+    if (verified.status !== 'success') {
+      return json({
+        received: true,
+        payment_status: verified.status,
+      });
     }
 
-    const verifiedTransaction =
-      verifyResult.data;
+    const metadata = verified.metadata ?? {};
+    const metadataOrderId =
+      typeof metadata === 'object' &&
+      metadata !== null &&
+      'order_id' in metadata
+        ? String(metadata.order_id)
+        : null;
 
-    /*
-     * Make absolutely sure the verified
-     * transaction is successful.
-     */
-    if (
-      verifiedTransaction.status !==
-      'success'
-    ) {
-      console.log(
-        'Payment is not successful:',
-        verifiedTransaction.status,
-      );
+    let order: {
+      id: string;
+      user_id: string;
+      total: number | string;
+      payment_status: string | null;
+      payment_reference: string | null;
+      payment_ref: string | null;
+      coupon_code: string | null;
+    } | null = null;
 
-      return new Response(
-        JSON.stringify({
-          received: true,
-          payment_status:
-            verifiedTransaction.status,
-        }),
-        {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+    let orderError = null;
+
+    if (metadataOrderId) {
+      const result = await supabase
+        .from('orders')
+        .select(
+          'id,user_id,total,payment_status,payment_reference,payment_ref,coupon_code',
+        )
+        .eq('id', metadataOrderId)
+        .maybeSingle();
+
+      order = result.data;
+      orderError = result.error;
     }
 
-    /*
-     * Get the amount Paystack says was paid.
-     *
-     * Paystack amount is in kobo.
-     */
-    const paidAmount =
-      Number(verifiedTransaction.amount) / 100;
+    if (!order && !orderError) {
+      const result = await supabase
+        .from('orders')
+        .select(
+          'id,user_id,total,payment_status,payment_reference,payment_ref,coupon_code',
+        )
+        .or(`payment_reference.eq.${reference},payment_ref.eq.${reference}`)
+        .maybeSingle();
 
-    /*
-     * Find the order.
-     */
-   const metadata =
-  verifiedTransaction.metadata ?? {};
-
-const metadataOrderId =
-  typeof metadata === 'object' &&
-  metadata !== null &&
-  'order_id' in metadata
-    ? String(metadata.order_id)
-    : null;
-
-let order = null;
-let orderError = null;
-
-/*
- * ============================================================
- * FIRST: FIND ORDER USING PAYSTACK METADATA
- * ============================================================
- *
- * Paystack initialization sends:
- *
- * metadata: {
- *   order_id: orderId
- * }
- *
- * This is the most reliable way to connect
- * the Paystack transaction to the order.
- */
-
-if (metadataOrderId) {
-  const result = await supabase
-    .from('orders')
-    .select(
-  'id, user_id, total, payment_status, payment_reference, payment_ref',
-)
-    .eq('id', metadataOrderId)
-    .maybeSingle();
-
-  order = result.data;
-  orderError = result.error;
-}
-
-/*
- * ============================================================
- * FALLBACK: FIND USING PAYSTACK REFERENCE
- * ============================================================
- */
-
-if (!order && !orderError) {
-  const result = await supabase
-    .from('orders')
-    .select(
-      'id, total, payment_status, payment_reference, payment_ref',
-    )
-    .or(
-      `payment_reference.eq.${reference},payment_ref.eq.${reference}`,
-    )
-    .maybeSingle();
-
-  order = result.data;
-  orderError = result.error;
-}
+      order = result.data;
+      orderError = result.error;
+    }
 
     if (orderError) {
-      console.error(
-        'Failed to find order:',
-        orderError,
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: 'Failed to find order',
-        }),
-        {
-          status: 500,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+      console.error('Failed to find order:', orderError);
+      return json({ error: 'Failed to find order' }, 500);
     }
 
     if (!order) {
-      console.error(
-        'No order found for reference:',
-        reference,
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: 'Order not found',
-        }),
-        {
-          status: 404,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+      console.error('No order found for reference:', reference);
+      return json({ error: 'Order not found' }, 404);
     }
 
-    /*
-     * IMPORTANT SECURITY CHECK
-     *
-     * Make sure the amount paid matches
-     * the order total.
-     */
-    const orderTotal =
-      Number(order.total);
+    const paidAmount = Number(verified.amount) / 100;
+    const orderTotal = Number(order.total);
 
-    if (
-      Math.abs(
-        paidAmount - orderTotal,
-      ) > 0.01
-    ) {
-      console.error(
-        'Payment amount mismatch',
+    if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - orderTotal) > 0.01) {
+      console.error('Payment amount mismatch', {
+        reference,
+        paidAmount,
+        orderTotal,
+      });
+      return json({ error: 'Payment amount mismatch' }, 400);
+    }
+
+    // Update the order if it is not already paid. Repeated webhooks remain safe.
+    if (order.payment_status !== 'paid') {
+      const { error: updateError } = await supabase
+        .from('orders')
+        .update({
+          payment_status: 'paid',
+          payment_reference: reference,
+          payment_ref: reference,
+          paid_at: new Date().toISOString(),
+          payment_method: verified.channel ?? null,
+          paystack_transaction_id: verified.id ?? null,
+        })
+        .eq('id', order.id);
+
+      if (updateError) {
+        console.error('Failed to update order:', updateError);
+        return json({ error: 'Failed to update order' }, 500);
+      }
+    }
+
+    // Keep payment history idempotent.
+    const { error: paymentError } = await supabase
+      .from('payments')
+      .upsert(
         {
+          order_id: order.id,
+          user_id: order.user_id,
           reference,
-          paidAmount,
-          orderTotal,
+          amount: paidAmount,
+          status: 'success',
+          channel: verified.channel ?? 'paystack',
         },
+        { onConflict: 'reference' },
       );
 
-      return new Response(
-        JSON.stringify({
-          error: 'Payment amount mismatch',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+    if (paymentError) {
+      console.error('Payment history synchronization failed:', paymentError);
+      // The order is already paid; Paystack should still receive 200.
     }
 
-    /*
-     * If already paid, don't process it again.
-     *
-     * This protects against duplicate webhook
-     * deliveries.
-     */
-    if (
-      order.payment_status ===
-      'paid'
-    ) {
-      console.log(
-        'Order already marked paid:',
-        order.id,
-      );
-
-      return new Response(
-        JSON.stringify({
-          received: true,
-          already_paid: true,
-        }),
+    // Count the coupon only after the payment is confirmed.
+    if (order.coupon_code) {
+      const { data: couponRedeemed, error: couponError } = await supabase.rpc(
+        'redeem_coupon',
         {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          p_coupon_code: order.coupon_code,
+          p_user_id: order.user_id,
+          p_order_id: order.id,
         },
       );
+
+      if (couponError) {
+        console.error('Coupon redemption failed:', couponError);
+      } else if (!couponRedeemed) {
+        console.warn('Coupon could not be redeemed after successful payment:', {
+          orderId: order.id,
+          coupon: order.coupon_code,
+        });
+      }
     }
 
-    /*
-     * Determine the payment channel.
-     *
-     * Examples:
-     * card
-     * bank
-     * ussd
-     * paystack
-     */
-    const paymentMethod =
-      verifiedTransaction.channel ??
-      'paystack';
+    console.log('Payment successfully confirmed:', {
+      orderId: order.id,
+      reference,
+      amount: paidAmount,
+      transactionId: verified.id,
+      channel: verified.channel,
+    });
 
-    /*
-     * UPDATE THE ORDER
-     *
-     * This is the important part.
-     */
-    const {
-      error: updateError,
-    } = await supabase
-      .from('orders')
-     .update({
-  payment_status: 'paid',
-  payment_reference: reference,
-  payment_ref: reference,
-  paid_at: new Date().toISOString(),
-  payment_method:
-    verifiedTransaction.channel ?? null,
-  paystack_transaction_id:
-    verifiedTransaction.id ?? null,
-})
-      .eq('id', order.id);
-
-    if (updateError) {
-      console.error(
-        'Failed to update order:',
-        updateError,
-      );
-
-      return new Response(
-        JSON.stringify({
-          error:
-            'Failed to update order',
-        }),
-        {
-          status: 500,
-          headers: {
-            'Content-Type':
-              'application/json',
-          },
-        },
-      );
-    }
-
-    /*
- * ============================================================
- * SYNC PAYMENT HISTORY
- * ============================================================
- *
- * The orders table is the payment source of truth.
- *
- * The payments table is the customer's payment-history record.
- *
- * Paystack webhook updates both.
- */
-
-const { error: paymentSyncError } =
-  await supabase
-    .from('payments')
-    .upsert(
-      {
-        order_id: order.id,
-        user_id: order.user_id,
-        reference,
-        amount: paidAmount,
-        status: 'success',
-        channel:
-          verifiedTransaction.channel ??
-          'paystack',
-      },
-      {
-        onConflict: 'reference',
-      },
-    );
-
-if (paymentSyncError) {
-  console.error(
-    'Failed to synchronize payment history:',
-    paymentSyncError,
-  );
-
-  /*
-   * Do NOT mark the webhook as failed here.
-   *
-   * The actual order has already been successfully
-   * verified and marked paid.
-   */
-} else {
-  console.log(
-    'Payment history synchronized:',
-    reference,
-  );
-}
-
-
-    console.log(
-      'Payment successfully confirmed:',
-      {
-        orderId: order.id,
-        reference,
-        amount: paidAmount,
-        transactionId:
-          verifiedTransaction.id,
-        paymentMethod,
-      },
-    );
-
-    /*
-     * Tell Paystack that we received
-     * the webhook successfully.
-     */
-    return new Response(
-      JSON.stringify({
-        received: true,
-        success: true,
-      }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type':
-            'application/json',
-        },
-      },
-    );
+    return json({
+      received: true,
+      success: true,
+      order_id: order.id,
+      reference,
+    });
   } catch (error) {
-    console.error(
-      'Paystack webhook error:',
-      error,
-    );
-
-    return new Response(
-      JSON.stringify({
-        error:
-          'Internal server error',
-      }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type':
-            'application/json',
-        },
-      },
+    console.error('Paystack webhook error:', error);
+    return json(
+      { error: error instanceof Error ? error.message : 'Internal server error' },
+      500,
     );
   }
 });

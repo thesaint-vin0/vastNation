@@ -1,24 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Minus, Plus, X, ShoppingBag, Tag, ArrowRight, Truck } from 'lucide-react';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { validateCoupon } from '../services/api';
-import { formatNaira, calculateDiscount, calculateShipping, classNames } from '../utils/helpers';
+import { getCheckoutSettings, validateCoupon } from '../services/api';
+import { formatNaira, calculateDiscount, calculateShipping, classNames, type ShippingSettings } from '../utils/helpers';
 import type { Coupon } from '../types';
 
 export default function Cart() {
   const { items, removeItem, updateQuantity, subtotal, clearCart } = useCart();
+  const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [couponCode, setCouponCode] = useState('');
   const [coupon, setCoupon] = useState<Coupon | null>(null);
   const [couponLoading, setCouponLoading] = useState(false);
   const [deliveryMethod, setDeliveryMethod] = useState('standard');
+  const [shippingSettings, setShippingSettings] = useState<ShippingSettings>({
+    shipping_threshold: 100000,
+    default_shipping_fee: 2500,
+    express_shipping_fee: 5000,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    void getCheckoutSettings()
+      .then((settings) => {
+        if (mounted) setShippingSettings(settings);
+      })
+      .catch((error) => {
+        console.error('Failed to load checkout settings:', error);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const discount = calculateDiscount(subtotal, coupon);
-  const shipping = calculateShipping(subtotal - discount, deliveryMethod);
+  const shipping = calculateShipping(subtotal - discount, deliveryMethod, shippingSettings);
   const total = subtotal - discount + shipping;
 
   const handleApplyCoupon = async (e: React.FormEvent) => {
@@ -26,7 +48,7 @@ export default function Cart() {
     if (!couponCode.trim()) return;
     setCouponLoading(true);
     try {
-      const result = await validateCoupon(couponCode);
+      const result = await validateCoupon(couponCode, user?.id);
       if (!result) {
         toast('Invalid or expired coupon code', 'error');
         setCoupon(null);

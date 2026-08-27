@@ -125,15 +125,42 @@ export async function addReview(
 
   return data;
 }
-export async function validateCoupon(code: string): Promise<Coupon | null> {
+export async function validateCoupon(
+  code: string,
+  userId?: string,
+): Promise<Coupon | null> {
   const { data, error } = await supabase
     .from('coupons')
     .select('*')
-    .eq('code', code.toUpperCase())
+    .eq('code', code.trim().toUpperCase())
     .eq('active', true)
     .maybeSingle();
+
   if (error) throw error;
-  return data;
+  if (!data) return null;
+
+  const coupon = data as Coupon;
+  const now = Date.now();
+
+  if (coupon.starts_at && new Date(coupon.starts_at).getTime() > now) return null;
+  if (coupon.expires_at && new Date(coupon.expires_at).getTime() < now) return null;
+  if (
+    coupon.usage_limit !== null &&
+    Number(coupon.usage_count ?? 0) >= Number(coupon.usage_limit)
+  ) return null;
+
+  if (userId && coupon.per_user_limit !== null) {
+    const { count, error: usageError } = await supabase
+      .from('coupon_usage')
+      .select('*', { count: 'exact', head: true })
+      .eq('coupon_id', coupon.id)
+      .eq('user_id', userId);
+
+    if (usageError) throw usageError;
+    if ((count ?? 0) >= Number(coupon.per_user_limit)) return null;
+  }
+
+  return coupon;
 }
 
 export async function getCoupons(): Promise<Coupon[]> {
@@ -346,8 +373,28 @@ export async function deleteCategory(id: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function createCoupon(coupon: Omit<Coupon, 'id' | 'created_at'>): Promise<void> {
-  const { error } = await supabase.from('coupons').insert(coupon);
+export async function createCoupon(
+  coupon: Omit<Coupon, 'id' | 'created_at' | 'usage_count'>,
+): Promise<Coupon> {
+  const { data, error } = await supabase
+    .from('coupons')
+    .insert({ ...coupon, usage_count: 0 })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Coupon;
+}
+
+export async function updateCoupon(
+  id: string,
+  updates: Partial<Omit<Coupon, 'id' | 'created_at'>>,
+): Promise<void> {
+  const { error } = await supabase
+    .from('coupons')
+    .update(updates)
+    .eq('id', id);
+
   if (error) throw error;
 }
 
@@ -359,4 +406,129 @@ export async function deleteCoupon(id: string): Promise<void> {
 export async function updateOrderStatus(orderId: string, status: string): Promise<void> {
   const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
   if (error) throw error;
+}
+
+
+export type UserSettings = {
+  user_id: string;
+  order_updates: boolean;
+  payment_updates: boolean;
+  shipping_updates: boolean;
+  product_alerts: boolean;
+  newsletter: boolean;
+  promotional_offers: boolean;
+  theme: 'system' | 'light' | 'dark';
+  updated_at: string;
+};
+
+export async function getUserSettings(userId: string): Promise<UserSettings | null> {
+  const { data, error } = await supabase
+    .from('user_settings')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data as UserSettings | null;
+}
+
+export async function upsertUserSettings(
+  userId: string,
+  updates: Partial<Omit<UserSettings, 'user_id' | 'updated_at'>>,
+): Promise<UserSettings> {
+  const { data, error } = await supabase
+    .from('user_settings')
+    .upsert(
+      { user_id: userId, ...updates, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' },
+    )
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as UserSettings;
+}
+
+export type StoreSettings = {
+  id: string;
+  store_name: string;
+  store_email: string;
+  store_phone: string;
+  store_address: string;
+  currency: string;
+  shipping_threshold: number;
+  default_shipping_fee: number;
+  express_shipping_fee: number;
+  tax_rate: number;
+  maintenance_mode: boolean;
+  notify_new_order: boolean;
+  notify_payment: boolean;
+  notify_low_stock: boolean;
+  notify_new_review: boolean;
+  updated_by: string | null;
+  updated_at: string;
+};
+
+export async function getStoreSettings(): Promise<StoreSettings | null> {
+  const { data, error } = await supabase
+    .from('store_settings')
+    .select('*')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data as StoreSettings | null;
+}
+
+export async function upsertStoreSettings(
+  updates: Omit<StoreSettings, 'id' | 'updated_by' | 'updated_at'>,
+  updatedBy: string,
+): Promise<StoreSettings> {
+  const { data, error } = await supabase
+    .from('store_settings')
+    .upsert(
+      {
+        id: '00000000-0000-0000-0000-000000000001',
+        ...updates,
+        updated_by: updatedBy,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' },
+    )
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as StoreSettings;
+}
+
+export async function deleteAccount(): Promise<void> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user = sessionData.session?.user;
+  if (!user) throw new Error('You are not signed in.');
+
+  const { error } = await supabase.functions.invoke('delete-account', {
+    body: { userId: user.id },
+  });
+
+  if (error) throw error;
+}
+
+
+export type CheckoutSettings = {
+  shipping_threshold: number;
+  default_shipping_fee: number;
+  express_shipping_fee: number;
+};
+
+export async function getCheckoutSettings(): Promise<CheckoutSettings> {
+  const { data, error } = await supabase.rpc('get_checkout_settings');
+  if (error) throw error;
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    shipping_threshold: Number(row?.shipping_threshold ?? 100000),
+    default_shipping_fee: Number(row?.default_shipping_fee ?? 2500),
+    express_shipping_fee: Number(row?.express_shipping_fee ?? 5000),
+  };
 }

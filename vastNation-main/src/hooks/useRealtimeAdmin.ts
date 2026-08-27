@@ -5,17 +5,20 @@ interface RealtimeAdminOptions {
   onOrdersChange?: () => void;
   onCustomersChange?: () => void;
   onReviewsChange?: () => void;
+  onCouponsChange?: () => void;
 }
 
 export function useRealtimeAdmin({
   onOrdersChange,
   onCustomersChange,
   onReviewsChange,
+  onCouponsChange,
 }: RealtimeAdminOptions) {
   useEffect(() => {
     const channel = supabase
       .channel('vast-nation-admin-realtime')
 
+      // Orders
       .on(
         'postgres_changes',
         {
@@ -29,6 +32,7 @@ export function useRealtimeAdmin({
         },
       )
 
+      // Customers / Profiles
       .on(
         'postgres_changes',
         {
@@ -42,6 +46,7 @@ export function useRealtimeAdmin({
         },
       )
 
+      // Reviews
       .on(
         'postgres_changes',
         {
@@ -55,6 +60,20 @@ export function useRealtimeAdmin({
         },
       )
 
+      // Coupons
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'coupons',
+        },
+        (payload) => {
+          console.log('COUPON REALTIME:', payload);
+          onCouponsChange?.();
+        },
+      )
+
       .subscribe((status) => {
         console.log(
           'ADMIN REALTIME STATUS:',
@@ -63,11 +82,12 @@ export function useRealtimeAdmin({
       });
 
     return () => {
-      supabase.removeChannel(channel);
+      void supabase.removeChannel(channel);
     };
   }, [
     onOrdersChange,
     onCustomersChange,
     onReviewsChange,
+    onCouponsChange,
   ]);
 }

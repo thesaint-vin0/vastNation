@@ -7,6 +7,7 @@ import { ToastProvider } from './context/ToastContext';
 import MainLayout from './layouts/MainLayout';
 import Home from './pages/Home';
 import PaymentCallback from './pages/PaymentCallback';
+import AdminSettings from './pages/AdminSettings';
 
 const Shop = lazy(() => import('./pages/Shop'));
 const ProductDetails = lazy(() => import('./pages/ProductDetails'));
@@ -50,6 +51,7 @@ export default function App() {
                     <Route path="/forgot-password" element={<ForgotPassword />} />
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/admin" element={<Admin />} />
+                    <Route path="/admin/settings" element={<AdminSettings />} />
                     <Route path="/contact" element={<Contact />} />
                     <Route path="/about" element={<About />} />
                     <Route path="/wishlist" element={<Wishlist />} />
