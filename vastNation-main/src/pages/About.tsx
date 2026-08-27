@@ -48,7 +48,7 @@ export default function About() {
           </motion.div>
           <motion.div initial={{ opacity: 0, x: 30 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true }} className="relative">
             <div className="aspect-[4/5] rounded-3xl overflow-hidden">
-              <img src="https://images.pexels.com/photos/1183266/pexels-photo-1183266.jpeg" alt="Vast Nation" className="w-full h-full object-cover" />
+              <img src="/images/me.jpg" alt="Vast Nation" className="w-full h-full object-cover" />
             </div>
             <div className="absolute -bottom-6 -left-6 glass-dark rounded-2xl p-6 max-w-xs hidden sm:block">
               <p className="font-display text-4xl font-bold text-gold-400">10K+</p>

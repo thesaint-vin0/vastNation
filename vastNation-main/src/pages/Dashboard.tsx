@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -11,6 +11,9 @@ import {
   Settings,
   LogOut,
   Package,
+  CheckCircle,
+  Clock,
+  AlertCircle,
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
@@ -51,6 +54,17 @@ type Tab =
   | 'payments'
   | 'settings';
 
+const EMPTY_ADDRESS_FORM = {
+  full_name: '',
+  phone: '',
+  line1: '',
+  line2: '',
+  city: '',
+  state: '',
+  postal_code: '',
+  country: 'Nigeria',
+};
+
 export default function Dashboard() {
   const {
     user,
@@ -62,92 +76,236 @@ export default function Dashboard() {
   const { items: wishlistItems } = useWishlist();
   const { toast } = useToast();
 
-  const [tab, setTab] =
-    useState<Tab>('dashboard');
+  const [tab, setTab] = useState<Tab>('dashboard');
 
-  const [orders, setOrders] =
-    useState<Order[]>([]);
-
-  const [addresses, setAddresses] =
-    useState<Address[]>([]);
-
-  const [payments, setPayments] =
-    useState<Payment[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [addresses, setAddresses] = useState<Address[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
 
   const [orderItems, setOrderItems] =
     useState<Record<string, OrderItem[]>>({});
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
 
-  const [fullName, setFullName] =
-    useState('');
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
 
-  const [phone, setPhone] =
-    useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
 
-  const [savingProfile, setSavingProfile] =
-    useState(false);
+  const [showAddrForm, setShowAddrForm] = useState(false);
 
-  // New address form
-  const [showAddrForm, setShowAddrForm] =
-    useState(false);
-
-  const [addrForm, setAddrForm] = useState({
-    full_name: '',
-    phone: '',
-    line1: '',
-    line2: '',
-    city: '',
-    state: '',
-    postal_code: '',
-    country: 'Nigeria',
-  });
+  const [addrForm, setAddrForm] =
+    useState({ ...EMPTY_ADDRESS_FORM });
 
   /*
    * ============================================================
-   * LOAD CUSTOMER DATA
+   * RECONCILE ORDERS WITH PAYMENTS
+   * ============================================================
+   *
+   * Payment status and delivery/order status are kept separate.
+   *
+   * Successful payment:
+   *
+   * payments.status = success
+   *          ↓
+   * orders.payment_status = paid
+   *
+   * The order delivery status is NOT changed here.
+   */
+
+  const reconcileOrdersWithPayments = useCallback(
+    (
+      orderList: Order[],
+      paymentList: Payment[],
+    ): Order[] => {
+      const paymentMap = new Map<string, Payment>();
+
+      for (const payment of paymentList) {
+        if (!payment.order_id) continue;
+
+        const existing = paymentMap.get(
+          payment.order_id,
+        );
+
+        if (
+          !existing ||
+          payment.status === 'success'
+        ) {
+          paymentMap.set(
+            payment.order_id,
+            payment,
+          );
+        }
+      }
+
+      return orderList.map((order) => {
+        const payment = paymentMap.get(order.id);
+
+        if (payment?.status === 'success') {
+          return {
+            ...order,
+            payment_status: 'paid',
+            payment_reference:
+              order.payment_reference ||
+              payment.reference ||
+              null,
+          };
+        }
+
+        return order;
+      });
+    },
+    [],
+  );
+
+  /*
+   * ============================================================
+   * LOAD ORDER ITEMS
+   * ============================================================
+   */
+
+  const loadOrderItems = useCallback(
+    async (orderList: Order[]) => {
+      if (orderList.length === 0) {
+        setOrderItems({});
+        return;
+      }
+
+      const results = await Promise.allSettled(
+        orderList.map(async (order) => {
+          const items = await getOrderItems(order.id);
+
+          return {
+            orderId: order.id,
+            items,
+          };
+        }),
+      );
+
+      const nextItems: Record<
+        string,
+        OrderItem[]
+      > = {};
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          nextItems[result.value.orderId] =
+            result.value.items;
+        }
+      }
+
+      setOrderItems(nextItems);
+    },
+    [],
+  );
+
+  /*
+   * ============================================================
+   * REFRESH CUSTOMER DATA
+   * ============================================================
+   *
+   * This replaces the old refreshOrders + refreshPayments
+   * combination.
+   *
+   * It always retrieves the newest:
+   *
+   * - Orders
+   * - Payments
+   * - Order items
+   *
+   * This prevents stale payment/order state.
+   */
+
+  const refreshCustomerData = useCallback(
+    async () => {
+      if (!user?.id) return;
+
+      try {
+        const [
+          orderData,
+          paymentData,
+        ] = await Promise.all([
+          getOrders(user.id),
+          getPayments(user.id),
+        ]);
+
+        const reconciledOrders =
+          reconcileOrdersWithPayments(
+            orderData,
+            paymentData,
+          );
+
+        setPayments(paymentData);
+        setOrders(reconciledOrders);
+
+        await loadOrderItems(
+          reconciledOrders,
+        );
+      } catch (error) {
+        console.error(
+          'Failed to refresh customer data:',
+          error,
+        );
+      }
+    },
+    [
+      user?.id,
+      reconcileOrdersWithPayments,
+      loadOrderItems,
+    ],
+  );
+
+  /*
+   * ============================================================
+   * INITIAL CUSTOMER DATA
    * ============================================================
    */
 
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
 
     let mounted = true;
 
-    setLoading(true);
+    const loadDashboard = async () => {
+      setLoading(true);
 
-    Promise.all([
-      getOrders(user.id),
-      getAddresses(user.id),
-      getPayments(user.id),
-    ])
-      .then(([o, a, p]) => {
+      try {
+        const [
+          orderData,
+          addressData,
+          paymentData,
+        ] = await Promise.all([
+          getOrders(user.id),
+          getAddresses(user.id),
+          getPayments(user.id),
+        ]);
+
         if (!mounted) return;
 
-        setOrders(o);
-        setAddresses(a);
-        setPayments(p);
+        const reconciledOrders =
+          reconcileOrdersWithPayments(
+            orderData,
+            paymentData,
+          );
 
-        o.forEach((order) => {
-          getOrderItems(order.id)
-            .then((items) => {
-              if (!mounted) return;
+        setOrders(reconciledOrders);
+        setAddresses(addressData);
+        setPayments(paymentData);
 
-              setOrderItems((prev) => ({
-                ...prev,
-                [order.id]: items,
-              }));
-            })
-            .catch((error) => {
-              console.error(
-                'Failed to load order items:',
-                error,
-              );
-            });
-        });
-      })
-      .catch((error) => {
+        await loadOrderItems(
+          reconciledOrders,
+        );
+
+        if (!mounted) return;
+
+        setFullName(
+          profile?.full_name ?? '',
+        );
+
+        setPhone(
+          profile?.phone ?? '',
+        );
+      } catch (error) {
         console.error(
           'Failed to load dashboard data:',
           error,
@@ -159,35 +317,40 @@ export default function Dashboard() {
             'error',
           );
         }
-      })
-      .finally(() => {
+      } finally {
         if (mounted) {
           setLoading(false);
         }
-      });
+      }
+    };
 
-    if (profile) {
-      setFullName(
-        profile.full_name ?? '',
-      );
-
-      setPhone(
-        profile.phone ?? '',
-      );
-    }
+    void loadDashboard();
 
     return () => {
       mounted = false;
     };
-  }, [user, profile, toast]);
+  }, [
+    user?.id,
+    profile,
+    toast,
+    reconcileOrdersWithPayments,
+    loadOrderItems,
+  ]);
 
   /*
    * ============================================================
    * CUSTOMER ORDER REALTIME
    * ============================================================
    *
-   * Keeps the customer's order status and payment status
-   * synchronized with Supabase in realtime.
+   * Admin changes:
+   *
+   * pending
+   * processing
+   * shipping
+   * delivered
+   * cancelled
+   *
+   * are reflected immediately.
    */
 
   useEffect(() => {
@@ -205,16 +368,15 @@ export default function Dashboard() {
           table: 'orders',
           filter: `user_id=eq.${user.id}`,
         },
-        (payload) => {
+        async (payload) => {
           console.log(
             'CUSTOMER ORDER REALTIME:',
             payload,
           );
 
-          /*
-           * New order
-           */
-          if (payload.eventType === 'INSERT') {
+          if (
+            payload.eventType === 'INSERT'
+          ) {
             const newOrder =
               payload.new as Order;
 
@@ -222,7 +384,8 @@ export default function Dashboard() {
               if (
                 currentOrders.some(
                   (order) =>
-                    order.id === newOrder.id,
+                    order.id ===
+                    newOrder.id,
                 )
               ) {
                 return currentOrders;
@@ -233,20 +396,34 @@ export default function Dashboard() {
                 ...currentOrders,
               ];
             });
+
+            try {
+              const items =
+                await getOrderItems(
+                  newOrder.id,
+                );
+
+              setOrderItems((current) => ({
+                ...current,
+                [newOrder.id]: items,
+              }));
+            } catch (error) {
+              console.error(
+                'Failed to load new order items:',
+                error,
+              );
+            }
+
+            /*
+             * Reconcile the newly inserted order
+             * with the current payment state.
+             */
+            await refreshCustomerData();
           }
 
-          /*
-           * Updated order
-           *
-           * This is especially important for:
-           *
-           * payment_status = paid
-           *
-           * and:
-           *
-           * status = processing/shipping/delivered
-           */
-          if (payload.eventType === 'UPDATE') {
+          if (
+            payload.eventType === 'UPDATE'
+          ) {
             const updatedOrder =
               payload.new as Order;
 
@@ -260,12 +437,17 @@ export default function Dashboard() {
                   : order,
               ),
             );
+
+            /*
+             * Fetch authoritative data after
+             * an admin/order/payment update.
+             */
+            await refreshCustomerData();
           }
 
-          /*
-           * Deleted order
-           */
-          if (payload.eventType === 'DELETE') {
+          if (
+            payload.eventType === 'DELETE'
+          ) {
             const deletedOrder =
               payload.old as Order;
 
@@ -276,6 +458,18 @@ export default function Dashboard() {
                   deletedOrder.id,
               ),
             );
+
+            setOrderItems((currentItems) => {
+              const next = {
+                ...currentItems,
+              };
+
+              delete next[
+                deletedOrder.id
+              ];
+
+              return next;
+            });
           }
         },
       )
@@ -286,9 +480,203 @@ export default function Dashboard() {
       });
 
     return () => {
-      supabase.removeChannel(channel);
+      void supabase.removeChannel(
+        channel,
+      );
     };
-  }, [user?.id]);
+  }, [
+    user?.id,
+    refreshCustomerData,
+  ]);
+
+  /*
+   * ============================================================
+   * CUSTOMER PAYMENT REALTIME
+   * ============================================================
+   *
+   * When the Paystack webhook creates/updates:
+   *
+   * payments.status = success
+   *
+   * the dashboard immediately refreshes.
+   */
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(
+        `customer-payments-${user.id}`,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'payments',
+          filter: `user_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          console.log(
+            'CUSTOMER PAYMENT REALTIME:',
+            payload,
+          );
+
+          /*
+           * ==================================================
+           * INSERT
+           * ==================================================
+           */
+
+          if (
+            payload.eventType === 'INSERT'
+          ) {
+            const newPayment =
+              payload.new as Payment;
+
+            setPayments(
+              (currentPayments) => {
+                if (
+                  currentPayments.some(
+                    (payment) =>
+                      payment.id ===
+                      newPayment.id,
+                  )
+                ) {
+                  return currentPayments;
+                }
+
+                return [
+                  newPayment,
+                  ...currentPayments,
+                ];
+              },
+            );
+
+            /*
+             * Immediately update the order UI
+             * if the payment is successful.
+             */
+            if (
+              newPayment.status ===
+                'success' &&
+              newPayment.order_id
+            ) {
+              setOrders(
+                (currentOrders) =>
+                  currentOrders.map(
+                    (order) =>
+                      order.id ===
+                      newPayment.order_id
+                        ? {
+                            ...order,
+                            payment_status:
+                              'paid',
+                            payment_reference:
+                              order.payment_reference ||
+                              newPayment.reference,
+                          }
+                        : order,
+                  ),
+              );
+            }
+
+            await refreshCustomerData();
+          }
+
+          /*
+           * ==================================================
+           * UPDATE
+           * ==================================================
+           */
+
+          if (
+            payload.eventType === 'UPDATE'
+          ) {
+            const updatedPayment =
+              payload.new as Payment;
+
+            setPayments(
+              (currentPayments) =>
+                currentPayments.map(
+                  (payment) =>
+                    payment.id ===
+                    updatedPayment.id
+                      ? {
+                          ...payment,
+                          ...updatedPayment,
+                        }
+                      : payment,
+                ),
+            );
+
+            if (
+              updatedPayment.status ===
+                'success' &&
+              updatedPayment.order_id
+            ) {
+              setOrders(
+                (currentOrders) =>
+                  currentOrders.map(
+                    (order) =>
+                      order.id ===
+                      updatedPayment.order_id
+                        ? {
+                            ...order,
+                            payment_status:
+                              'paid',
+                            payment_reference:
+                              order.payment_reference ||
+                              updatedPayment.reference,
+                          }
+                        : order,
+                  ),
+              );
+            }
+
+            await refreshCustomerData();
+          }
+
+          /*
+           * ==================================================
+           * DELETE
+           * ==================================================
+           */
+
+          if (
+            payload.eventType === 'DELETE'
+          ) {
+            const deletedPayment =
+              payload.old as Payment;
+
+            setPayments(
+              (currentPayments) =>
+                currentPayments.filter(
+                  (payment) =>
+                    payment.id !==
+                    deletedPayment.id,
+                ),
+            );
+
+            await refreshCustomerData();
+          }
+        },
+      )
+      .subscribe((status) => {
+        console.log(
+          `CUSTOMER PAYMENT REALTIME STATUS: ${status}`,
+        );
+      });
+
+    return () => {
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    user?.id,
+    refreshCustomerData,
+  ]);
 
   /*
    * ============================================================
@@ -316,8 +704,8 @@ export default function Dashboard() {
 
     try {
       await updateProfile(user.id, {
-        full_name: fullName,
-        phone,
+        full_name: fullName.trim(),
+        phone: phone.trim(),
       });
 
       await refreshProfile();
@@ -364,14 +752,7 @@ export default function Dashboard() {
       setShowAddrForm(false);
 
       setAddrForm({
-        full_name: '',
-        phone: '',
-        line1: '',
-        line2: '',
-        city: '',
-        state: '',
-        postal_code: '',
-        country: 'Nigeria',
+        ...EMPTY_ADDRESS_FORM,
       });
 
       toast('Address added!');
@@ -394,8 +775,8 @@ export default function Dashboard() {
     try {
       await deleteAddress(id);
 
-      setAddresses((prev) =>
-        prev.filter(
+      setAddresses((previous) =>
+        previous.filter(
           (address) =>
             address.id !== id,
         ),
@@ -422,11 +803,18 @@ export default function Dashboard() {
    */
 
   const handleSignOut = async () => {
-    await signOut();
+    try {
+      await signOut();
 
-    toast(
-      'Signed out successfully',
-    );
+      toast(
+        'Signed out successfully',
+      );
+    } catch (error) {
+      console.error(
+        'Sign out failed:',
+        error,
+      );
+    }
   };
 
   /*
@@ -479,22 +867,21 @@ export default function Dashboard() {
    * ============================================================
    */
 
-  const totalSpent =
-    payments
-      .filter(
-        (payment) =>
-          payment.status ===
-          'success',
-      )
-      .reduce(
-        (sum, payment) =>
-          sum + payment.amount,
-        0,
-      );
+  const totalSpent = payments
+    .filter(
+      (payment) =>
+        payment.status === 'success',
+    )
+    .reduce(
+      (sum, payment) =>
+        sum +
+        Number(payment.amount || 0),
+      0,
+    );
 
   /*
    * ============================================================
-   * ORDER STATUS CLASS
+   * STATUS HELPERS
    * ============================================================
    */
 
@@ -522,14 +909,12 @@ export default function Dashboard() {
     }
   };
 
-  /*
-   * ============================================================
-   * PAYMENT STATUS CLASS
-   * ============================================================
-   */
-
   const getPaymentStatusClass = (
-    status: Order['payment_status'],
+    status:
+      | Order['payment_status']
+      | string
+      | null
+      | undefined,
   ) => {
     switch (status) {
       case 'paid':
@@ -549,6 +934,31 @@ export default function Dashboard() {
     }
   };
 
+  const getPaymentStatusLabel = (
+    status:
+      | Order['payment_status']
+      | string
+      | null
+      | undefined,
+  ) => {
+    switch (status) {
+      case 'paid':
+        return 'Paid';
+
+      case 'pending':
+        return 'Pending';
+
+      case 'failed':
+        return 'Failed';
+
+      case 'refunded':
+        return 'Refunded';
+
+      default:
+        return status || 'Pending';
+    }
+  };
+
   /*
    * ============================================================
    * RENDER
@@ -559,9 +969,7 @@ export default function Dashboard() {
     <div className="section-padding py-8 lg:py-12">
       <div className="grid lg:grid-cols-4 gap-8">
 
-        {/* ======================================================
-            SIDEBAR
-        ====================================================== */}
+        {/* SIDEBAR */}
 
         <aside className="lg:col-span-1">
           <div className="glass rounded-2xl p-6 sticky top-28">
@@ -570,7 +978,8 @@ export default function Dashboard() {
               <div className="w-12 h-12 rounded-full bg-gold-400/20 border border-gold-400/40 flex items-center justify-center text-gold-400 font-bold text-lg">
                 {(
                   profile?.full_name?.[0] ??
-                  user.email[0]
+                  user.email?.[0] ??
+                  '?'
                 ).toUpperCase()}
               </div>
 
@@ -590,6 +999,7 @@ export default function Dashboard() {
               {menuItems.map((item) => (
                 <button
                   key={item.id}
+                  type="button"
                   onClick={() =>
                     setTab(item.id)
                   }
@@ -614,10 +1024,29 @@ export default function Dashboard() {
                         }
                       </span>
                     )}
+
+                  {item.id ===
+                    'payments' &&
+                    payments.filter(
+                      (payment) =>
+                        payment.status ===
+                        'success',
+                    ).length > 0 && (
+                      <span className="ml-auto text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                        {
+                          payments.filter(
+                            (payment) =>
+                              payment.status ===
+                              'success',
+                          ).length
+                        }
+                      </span>
+                    )}
                 </button>
               ))}
 
               <button
+                type="button"
                 onClick={handleSignOut}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-red-400 hover:bg-red-500/10 transition-all"
               >
@@ -629,15 +1058,11 @@ export default function Dashboard() {
           </div>
         </aside>
 
-        {/* ======================================================
-            CONTENT
-        ====================================================== */}
+        {/* CONTENT */}
 
         <div className="lg:col-span-3">
 
-          {/* ====================================================
-              DASHBOARD
-          ==================================================== */}
+          {/* DASHBOARD */}
 
           {tab === 'dashboard' && (
             <motion.div
@@ -673,17 +1098,14 @@ export default function Dashboard() {
                       'text-gold-400',
                   },
                   {
-                    label:
-                      'Wishlist Items',
+                    label: 'Wishlist Items',
                     value:
                       wishlistItems.length,
                     icon: Heart,
-                    color:
-                      'text-red-400',
+                    color: 'text-red-400',
                   },
                   {
-                    label:
-                      'Saved Addresses',
+                    label: 'Saved Addresses',
                     value:
                       addresses.length,
                     icon: MapPin,
@@ -693,7 +1115,7 @@ export default function Dashboard() {
                 ].map(
                   (stat, index) => (
                     <motion.div
-                      key={index}
+                      key={stat.label}
                       initial={{
                         opacity: 0,
                         y: 20,
@@ -727,7 +1149,21 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Recent Orders */}
+              <div className="glass rounded-2xl p-4 mt-4 border border-green-500/10">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+
+                  <div>
+                    <p className="text-sm text-white font-medium">
+                      Account synchronized
+                    </p>
+
+                    <p className="text-xs text-ink-400">
+                      Orders and payments update automatically.
+                    </p>
+                  </div>
+                </div>
+              </div>
 
               <div className="mt-8">
                 <h2 className="font-display text-xl font-bold text-white mb-4">
@@ -736,8 +1172,7 @@ export default function Dashboard() {
 
                 {loading ? (
                   <div className="glass rounded-2xl p-6 animate-pulse h-32" />
-                ) : orders.length ===
-                  0 ? (
+                ) : orders.length === 0 ? (
                   <div className="glass rounded-2xl p-8 text-center">
                     <Package className="w-10 h-10 text-ink-500 mx-auto mb-3" />
 
@@ -762,7 +1197,6 @@ export default function Dashboard() {
                           className="glass rounded-xl p-4"
                         >
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-
                             <div>
                               <p className="text-sm font-medium text-white font-mono">
                                 {
@@ -778,12 +1212,9 @@ export default function Dashboard() {
                             </div>
 
                             <div className="flex items-center gap-2 flex-wrap">
-
-                              {/* Order status */}
-
                               <span
                                 className={classNames(
-                                  'text-xs font-medium px-3 py-1 rounded-full',
+                                  'text-xs font-medium px-3 py-1 rounded-full capitalize',
                                   getOrderStatusClass(
                                     order.status,
                                   ),
@@ -791,8 +1222,6 @@ export default function Dashboard() {
                               >
                                 {order.status}
                               </span>
-
-                              {/* Payment status */}
 
                               <span
                                 className={classNames(
@@ -803,14 +1232,17 @@ export default function Dashboard() {
                                 )}
                               >
                                 Payment:{' '}
-                                {
-                                  order.payment_status
-                                }
+                                {getPaymentStatusLabel(
+                                  order.payment_status,
+                                )}
                               </span>
 
                               <span className="text-sm font-bold text-gold-400">
                                 {formatNaira(
-                                  order.total,
+                                  Number(
+                                    order.total ||
+                                      0,
+                                  ),
                                 )}
                               </span>
                             </div>
@@ -823,9 +1255,7 @@ export default function Dashboard() {
             </motion.div>
           )}
 
-          {/* ====================================================
-              PROFILE
-          ==================================================== */}
+          {/* PROFILE */}
 
           {tab === 'profile' && (
             <motion.div
@@ -864,12 +1294,14 @@ export default function Dashboard() {
 
                   <div>
                     <label className="text-xs font-semibold uppercase tracking-widest text-gold-400 mb-2 block">
-                      Email (read-only)
+                      Email
                     </label>
 
                     <input
                       type="email"
-                      value={user.email}
+                      value={
+                        user.email ?? ''
+                      }
                       disabled
                       className="input-field opacity-50"
                     />
@@ -894,6 +1326,7 @@ export default function Dashboard() {
                   </div>
 
                   <button
+                    type="button"
                     onClick={
                       handleSaveProfile
                     }
@@ -911,9 +1344,7 @@ export default function Dashboard() {
             </motion.div>
           )}
 
-          {/* ====================================================
-              ORDERS
-          ==================================================== */}
+          {/* ORDERS */}
 
           {tab === 'orders' && (
             <motion.div
@@ -932,8 +1363,7 @@ export default function Dashboard() {
 
               {loading ? (
                 <div className="glass rounded-2xl p-6 animate-pulse h-32" />
-              ) : orders.length ===
-                0 ? (
+              ) : orders.length === 0 ? (
                 <div className="glass rounded-2xl p-8 text-center">
                   <Package className="w-10 h-10 text-ink-500 mx-auto mb-3" />
 
@@ -950,139 +1380,143 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {orders.map(
-                    (order) => (
-                      <div
-                        key={order.id}
-                        className="glass rounded-2xl p-5"
-                      >
+                  {orders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="glass rounded-2xl p-5"
+                    >
+                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4 pb-4 border-b border-white/10">
 
-                        {/* Order header */}
+                        <div>
+                          <p className="text-sm font-mono font-medium text-white">
+                            {
+                              order.order_number
+                            }
+                          </p>
 
-                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4 pb-4 border-b border-white/10">
+                          <p className="text-xs text-ink-400">
+                            {formatDate(
+                              order.created_at,
+                            )}
+                          </p>
 
-                          <div>
-                            <p className="text-sm font-mono font-medium text-white">
-                              {
-                                order.order_number
-                              }
+                          {(order.payment_reference ||
+                            order.payment_ref) && (
+                            <p className="text-[11px] text-ink-500 mt-2">
+                              Ref:{' '}
+                              <span className="text-ink-300 font-mono">
+                                {order.payment_reference ||
+                                  order.payment_ref}
+                              </span>
                             </p>
-
-                            <p className="text-xs text-ink-400">
-                              {formatDate(
-                                order.created_at,
-                              )}
-                            </p>
-                          </div>
-
-                          <div className="flex items-center gap-2 flex-wrap">
-
-                            {/* ORDER STATUS */}
-
-                            <span
-                              className={classNames(
-                                'text-xs font-medium px-3 py-1 rounded-full',
-                                getOrderStatusClass(
-                                  order.status,
-                                ),
-                              )}
-                            >
-                              Order:{' '}
-                              {order.status}
-                            </span>
-
-                            {/* PAYMENT STATUS */}
-
-                            <span
-                              className={classNames(
-                                'text-xs font-medium px-3 py-1 rounded-full',
-                                getPaymentStatusClass(
-                                  order.payment_status,
-                                ),
-                              )}
-                            >
-                              Payment:{' '}
-                              {
-                                order.payment_status
-                              }
-                            </span>
-
-                            <span className="text-lg font-bold text-gold-400">
-                              {formatNaira(
-                                order.total,
-                              )}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Order items */}
-
-                        <div className="space-y-2">
-                          {(
-                            orderItems[
-                              order.id
-                            ] ?? []
-                          ).map(
-                            (item) => (
-                              <div
-                                key={
-                                  item.id
-                                }
-                                className="flex items-center gap-3"
-                              >
-                                {item.image_url && (
-                                  <img
-                                    src={
-                                      item.image_url
-                                    }
-                                    alt=""
-                                    className="w-10 h-12 object-cover rounded"
-                                  />
-                                )}
-
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm text-white truncate">
-                                    {
-                                      item.name
-                                    }
-                                  </p>
-
-                                  <p className="text-xs text-ink-500">
-                                    {
-                                      item.size
-                                    }{' '}
-                                    /{' '}
-                                    {
-                                      item.color
-                                    }{' '}
-                                    x
-                                    {
-                                      item.quantity
-                                    }
-                                  </p>
-                                </div>
-
-                                <span className="text-sm text-ink-300">
-                                  {formatNaira(
-                                    item.price *
-                                      item.quantity,
-                                  )}
-                                </span>
-                              </div>
-                            ),
                           )}
                         </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={classNames(
+                              'text-xs font-medium px-3 py-1 rounded-full capitalize',
+                              getOrderStatusClass(
+                                order.status,
+                              ),
+                            )}
+                          >
+                            Order:{' '}
+                            {order.status}
+                          </span>
+
+                          <span
+                            className={classNames(
+                              'text-xs font-medium px-3 py-1 rounded-full',
+                              getPaymentStatusClass(
+                                order.payment_status,
+                              ),
+                            )}
+                          >
+                            Payment:{' '}
+                            {getPaymentStatusLabel(
+                              order.payment_status,
+                            )}
+                          </span>
+
+                          <span className="text-lg font-bold text-gold-400">
+                            {formatNaira(
+                              Number(
+                                order.total ||
+                                  0,
+                              ),
+                            )}
+                          </span>
+                        </div>
                       </div>
-                    ),
-                  )}
+
+                      <div className="space-y-2">
+                        {(
+                          orderItems[
+                            order.id
+                          ] ?? []
+                        ).map((item) => (
+                          <div
+                            key={item.id}
+                            className="flex items-center gap-3"
+                          >
+                            {item.image_url && (
+                              <img
+                                src={
+                                  item.image_url
+                                }
+                                alt=""
+                                className="w-10 h-12 object-cover rounded"
+                              />
+                            )}
+
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-white truncate">
+                                {item.name}
+                              </p>
+
+                              <p className="text-xs text-ink-500">
+                                {item.size}{' '}
+                                /{' '}
+                                {item.color}{' '}
+                                ×{' '}
+                                {item.quantity}
+                              </p>
+                            </div>
+
+                            <span className="text-sm text-ink-300">
+                              {formatNaira(
+                                Number(
+                                  item.price ||
+                                    0,
+                                ) *
+                                  Number(
+                                    item.quantity ||
+                                      0,
+                                  ),
+                              )}
+                            </span>
+                          </div>
+                        ))}
+
+                        {(
+                          orderItems[
+                            order.id
+                          ] ?? []
+                        ).length === 0 && (
+                          <p className="text-xs text-ink-500">
+                            Order items unavailable.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </motion.div>
           )}
 
-          {/* ====================================================
-              WISHLIST
-          ==================================================== */}
+          {/* WISHLIST */}
 
           {tab === 'wishlist' && (
             <motion.div
@@ -1099,14 +1533,12 @@ export default function Dashboard() {
                 My Wishlist
               </h1>
 
-              {wishlistItems.length ===
-              0 ? (
+              {wishlistItems.length === 0 ? (
                 <div className="glass rounded-2xl p-8 text-center">
                   <Heart className="w-10 h-10 text-ink-500 mx-auto mb-3" />
 
                   <p className="text-ink-400 text-sm mb-4">
-                    Your wishlist is
-                    empty
+                    Your wishlist is empty
                   </p>
 
                   <Link
@@ -1121,9 +1553,7 @@ export default function Dashboard() {
                   {wishlistItems.map(
                     (product) => (
                       <Link
-                        key={
-                          product.id
-                        }
+                        key={product.id}
                         to={`/product/${product.slug}`}
                         className="glass rounded-2xl overflow-hidden group"
                       >
@@ -1131,7 +1561,8 @@ export default function Dashboard() {
                           <img
                             src={
                               product
-                                .images[0]
+                                .images?.[0] ||
+                              '/placeholder-product.png'
                             }
                             alt={
                               product.name
@@ -1149,7 +1580,10 @@ export default function Dashboard() {
 
                           <p className="text-sm text-gold-400 font-medium">
                             {formatNaira(
-                              product.price,
+                              Number(
+                                product.price ||
+                                  0,
+                              ),
                             )}
                           </p>
                         </div>
@@ -1161,9 +1595,7 @@ export default function Dashboard() {
             </motion.div>
           )}
 
-          {/* ====================================================
-              ADDRESSES
-          ==================================================== */}
+          {/* ADDRESSES */}
 
           {tab === 'addresses' && (
             <motion.div
@@ -1182,10 +1614,10 @@ export default function Dashboard() {
                 </h1>
 
                 <button
+                  type="button"
                   onClick={() =>
                     setShowAddrForm(
-                      (value) =>
-                        !value,
+                      (value) => !value,
                     )
                   }
                   className="btn-gold rounded-lg px-4 py-2 text-sm uppercase tracking-wider"
@@ -1231,8 +1663,7 @@ export default function Dashboard() {
                         setAddrForm({
                           ...addrForm,
                           phone:
-                            e.target
-                              .value,
+                            e.target.value,
                         })
                       }
                       className="input-field"
@@ -1243,15 +1674,12 @@ export default function Dashboard() {
                     type="text"
                     required
                     placeholder="Address Line 1"
-                    value={
-                      addrForm.line1
-                    }
+                    value={addrForm.line1}
                     onChange={(e) =>
                       setAddrForm({
                         ...addrForm,
                         line1:
-                          e.target
-                            .value,
+                          e.target.value,
                       })
                     }
                     className="input-field"
@@ -1260,15 +1688,12 @@ export default function Dashboard() {
                   <input
                     type="text"
                     placeholder="Address Line 2 (Optional)"
-                    value={
-                      addrForm.line2
-                    }
+                    value={addrForm.line2}
                     onChange={(e) =>
                       setAddrForm({
                         ...addrForm,
                         line2:
-                          e.target
-                            .value,
+                          e.target.value,
                       })
                     }
                     className="input-field"
@@ -1279,15 +1704,12 @@ export default function Dashboard() {
                       type="text"
                       required
                       placeholder="City"
-                      value={
-                        addrForm.city
-                      }
+                      value={addrForm.city}
                       onChange={(e) =>
                         setAddrForm({
                           ...addrForm,
                           city:
-                            e.target
-                              .value,
+                            e.target.value,
                         })
                       }
                       className="input-field"
@@ -1297,15 +1719,12 @@ export default function Dashboard() {
                       type="text"
                       required
                       placeholder="State"
-                      value={
-                        addrForm.state
-                      }
+                      value={addrForm.state}
                       onChange={(e) =>
                         setAddrForm({
                           ...addrForm,
                           state:
-                            e.target
-                              .value,
+                            e.target.value,
                         })
                       }
                       className="input-field"
@@ -1321,8 +1740,7 @@ export default function Dashboard() {
                         setAddrForm({
                           ...addrForm,
                           postal_code:
-                            e.target
-                              .value,
+                            e.target.value,
                         })
                       }
                       className="input-field"
@@ -1352,8 +1770,7 @@ export default function Dashboard() {
                 </form>
               )}
 
-              {addresses.length ===
-              0 ? (
+              {addresses.length === 0 ? (
                 <div className="glass rounded-2xl p-8 text-center">
                   <MapPin className="w-10 h-10 text-ink-500 mx-auto mb-3" />
 
@@ -1366,17 +1783,16 @@ export default function Dashboard() {
                   {addresses.map(
                     (address) => (
                       <div
-                        key={
-                          address.id
-                        }
+                        key={address.id}
                         className="glass rounded-2xl p-5"
                       >
                         <div className="flex items-start justify-between mb-3">
                           <MapPin className="w-5 h-5 text-gold-400" />
 
                           <button
+                            type="button"
                             onClick={() =>
-                              handleDeleteAddress(
+                              void handleDeleteAddress(
                                 address.id,
                               )
                             }
@@ -1393,37 +1809,25 @@ export default function Dashboard() {
                         </p>
 
                         <p className="text-sm text-ink-400 mt-1">
-                          {
-                            address.line1
-                          }
-
+                          {address.line1}
                           {address.line2 &&
                             `, ${address.line2}`}
                         </p>
 
                         <p className="text-sm text-ink-400">
-                          {
-                            address.city
-                          }
-                          ,{' '}
-                          {
-                            address.state
-                          }
+                          {address.city},{' '}
+                          {address.state}
                         </p>
 
                         <p className="text-sm text-ink-400">
-                          {
-                            address.country
-                          }{' '}
+                          {address.country}{' '}
                           {
                             address.postal_code
                           }
                         </p>
 
                         <p className="text-xs text-ink-500 mt-2">
-                          {
-                            address.phone
-                          }
+                          {address.phone}
                         </p>
                       </div>
                     ),
@@ -1433,9 +1837,7 @@ export default function Dashboard() {
             </motion.div>
           )}
 
-          {/* ====================================================
-              PAYMENTS
-          ==================================================== */}
+          {/* PAYMENT HISTORY */}
 
           {tab === 'payments' && (
             <motion.div
@@ -1448,12 +1850,24 @@ export default function Dashboard() {
                 y: 0,
               }}
             >
-              <h1 className="font-display text-3xl font-bold text-white mb-6">
-                Payment History
-              </h1>
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h1 className="font-display text-3xl font-bold text-white">
+                    Payment History
+                  </h1>
 
-              {payments.length ===
-              0 ? (
+                  <p className="text-xs text-ink-500 mt-1">
+                    Payments update automatically after confirmation.
+                  </p>
+                </div>
+
+                <span className="text-xs text-ink-400">
+                  {payments.length}{' '}
+                  transactions
+                </span>
+              </div>
+
+              {payments.length === 0 ? (
                 <div className="glass rounded-2xl p-8 text-center">
                   <CreditCard className="w-10 h-10 text-ink-500 mx-auto mb-3" />
 
@@ -1464,70 +1878,106 @@ export default function Dashboard() {
               ) : (
                 <div className="space-y-3">
                   {payments.map(
-                    (payment) => (
-                      <div
-                        key={
-                          payment.id
-                        }
-                        className="glass rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
-                      >
-                        <div className="flex items-center gap-3">
-                          <CreditCard className="w-5 h-5 text-gold-400" />
+                    (payment) => {
+                      const successful =
+                        payment.status ===
+                        'success';
 
-                          <div>
-                            <p className="text-sm font-mono text-white">
-                              {
-                                payment.reference
-                              }
-                            </p>
+                      const pending =
+                        payment.status ===
+                        'pending';
 
-                            <p className="text-xs text-ink-400">
-                              {formatDate(
-                                payment.created_at,
-                              )}{' '}
-                              ·{' '}
-                              {
-                                payment.channel
-                              }
-                            </p>
+                      return (
+                        <div
+                          key={payment.id}
+                          className="glass rounded-xl p-4"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={classNames(
+                                  'w-10 h-10 rounded-full flex items-center justify-center',
+                                  successful
+                                    ? 'bg-green-500/10'
+                                    : pending
+                                      ? 'bg-yellow-500/10'
+                                      : 'bg-red-500/10',
+                                )}
+                              >
+                                {successful ? (
+                                  <CheckCircle className="w-5 h-5 text-green-400" />
+                                ) : pending ? (
+                                  <Clock className="w-5 h-5 text-yellow-400" />
+                                ) : (
+                                  <AlertCircle className="w-5 h-5 text-red-400" />
+                                )}
+                              </div>
+
+                              <div>
+                                <p className="text-sm font-mono text-white break-all">
+                                  {
+                                    payment.reference
+                                  }
+                                </p>
+
+                                <p className="text-xs text-ink-400">
+                                  {formatDate(
+                                    payment.created_at,
+                                  )}{' '}
+                                  ·{' '}
+                                  {
+                                    payment.channel
+                                  }
+                                </p>
+
+                                {payment.order_id && (
+                                  <p className="text-[10px] text-ink-500 mt-1 font-mono">
+                                    Order:{' '}
+                                    {
+                                      payment.order_id
+                                    }
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <span
+                                className={classNames(
+                                  'text-xs font-medium px-3 py-1 rounded-full capitalize',
+                                  successful
+                                    ? 'bg-green-500/20 text-green-400'
+                                    : pending
+                                      ? 'bg-yellow-500/20 text-yellow-400'
+                                      : 'bg-red-500/20 text-red-400',
+                                )}
+                              >
+                                {
+                                  payment.status
+                                }
+                              </span>
+
+                              <span className="text-sm font-bold text-white">
+                                {formatNaira(
+                                  Number(
+                                    payment.amount ||
+                                      0,
+                                  ),
+                                )}
+                              </span>
+                            </div>
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-4">
-                          <span
-                            className={classNames(
-                              'text-xs font-medium px-3 py-1 rounded-full',
-                              payment.status ===
-                                'success'
-                                ? 'bg-green-500/20 text-green-400'
-                                : payment.status ===
-                                    'pending'
-                                  ? 'bg-yellow-500/20 text-yellow-400'
-                                  : 'bg-red-500/20 text-red-400',
-                            )}
-                          >
-                            {
-                              payment.status
-                            }
-                          </span>
-
-                          <span className="text-sm font-bold text-white">
-                            {formatNaira(
-                              payment.amount,
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    ),
+                      );
+                    },
                   )}
                 </div>
               )}
             </motion.div>
           )}
 
-          {/* ====================================================
-              SETTINGS
-          ==================================================== */}
+          {/* SETTINGS */}
 
           {tab === 'settings' && (
             <motion.div
@@ -1561,32 +2011,32 @@ export default function Dashboard() {
                     'New product alerts',
                     'Newsletter',
                     'Promotional offers',
-                  ].map(
-                    (item) => (
-                      <label
-                        key={item}
-                        className="flex items-center gap-3 py-2 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          defaultChecked
-                          className="accent-gold-400 w-4 h-4"
-                        />
+                  ].map((item) => (
+                    <label
+                      key={item}
+                      className="flex items-center gap-3 py-2 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        defaultChecked
+                        className="accent-gold-400 w-4 h-4"
+                      />
 
-                        <span className="text-sm text-ink-300">
-                          {item}
-                        </span>
-                      </label>
-                    ),
-                  )}
+                      <span className="text-sm text-ink-300">
+                        {item}
+                      </span>
+                    </label>
+                  ))}
                 </div>
 
                 <div className="pt-4 border-t border-white/10">
+
                   <h3 className="text-sm font-semibold text-white mb-2">
                     Danger Zone
                   </h3>
 
                   <button
+                    type="button"
                     onClick={
                       handleSignOut
                     }

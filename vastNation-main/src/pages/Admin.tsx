@@ -1,7 +1,14 @@
 import { supabase } from '../lib/supabase';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Navigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
+
 import {
   LayoutDashboard,
   Package,
@@ -19,6 +26,8 @@ import {
   CheckCircle,
   Clock,
   XCircle,
+  Pencil,
+  Save,
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
@@ -85,12 +94,29 @@ type ProductFlag =
   | 'is_trending'
   | 'is_limited';
 
+type PaymentRecord = {
+  id: string;
+  order_id: string;
+  user_id: string;
+  reference: string | null;
+  amount: number | string | null;
+  status: string | null;
+  channel: string | null;
+  created_at: string;
+};
+
+type AdminOrder = Order & {
+  reconciled_payment_status?: string;
+  payment_record?: PaymentRecord | null;
+};
+
 type AdminReview = Review & {
   product?: {
     id: string;
     name: string;
     slug: string;
   } | null;
+
   profile?: {
     id: string;
     email: string;
@@ -98,13 +124,47 @@ type AdminReview = Review & {
   } | null;
 };
 
-const EMPTY_PRODUCT_FORM = {
+type ProductForm = {
+  name: string;
+  description: string;
+  price: string;
+  compare_at_price: string;
+  category_id: string;
+  images: File[];
+  existingImages: string[];
+  sizes: string;
+  colors: string;
+  stock: string;
+  badge: string;
+  is_featured: boolean;
+  is_new: boolean;
+  is_bestseller: boolean;
+  is_trending: boolean;
+  is_limited: boolean;
+};
+
+type CategoryForm = {
+  name: string;
+  description: string;
+  image: File | null;
+  existingImage: string;
+};
+
+type CouponForm = {
+  code: string;
+  type: 'percent' | 'fixed';
+  value: string;
+  min_order: string;
+};
+
+const EMPTY_PRODUCT_FORM: ProductForm = {
   name: '',
   description: '',
   price: '',
   compare_at_price: '',
   category_id: '',
-  images: [] as File[],
+  images: [],
+  existingImages: [],
   sizes: 'S,M,L,XL',
   colors: 'Black,White',
   stock: '10',
@@ -116,13 +176,14 @@ const EMPTY_PRODUCT_FORM = {
   is_limited: false,
 };
 
-const EMPTY_CATEGORY_FORM = {
+const EMPTY_CATEGORY_FORM: CategoryForm = {
   name: '',
   description: '',
-  image: null as File | null,
+  image: null,
+  existingImage: '',
 };
 
-const EMPTY_COUPON_FORM = {
+const EMPTY_COUPON_FORM: CouponForm = {
   code: '',
   type: 'percent',
   value: '',
@@ -146,41 +207,77 @@ const ORDER_STATUSES: OrderStatus[] = [
 ];
 
 export default function Admin() {
-  const { user, profile, loading: authLoading } = useAuth();
+  const {
+    user,
+    profile,
+    loading: authLoading,
+  } = useAuth();
+
   const { toast } = useToast();
 
-  const [tab, setTab] = useState<Tab>('dashboard');
+  const [tab, setTab] =
+    useState<Tab>('dashboard');
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [customers, setCustomers] = useState<Profile[]>([]);
-  const [coupons, setCoupons] = useState<Coupon[]>([]);
-  const [reviews, setReviews] = useState<AdminReview[]>([]);
+  const [products, setProducts] =
+    useState<Product[]>([]);
 
-  const [dataLoading, setDataLoading] = useState(false);
+  const [categories, setCategories] =
+    useState<Category[]>([]);
 
-  const [showProductForm, setShowProductForm] = useState(false);
-  const [showCategoryForm, setShowCategoryForm] = useState(false);
-  const [showCouponForm, setShowCouponForm] = useState(false);
+  const [orders, setOrders] =
+    useState<AdminOrder[]>([]);
 
-  const [productForm, setProductForm] = useState({
-    ...EMPTY_PRODUCT_FORM,
-  });
+  const [customers, setCustomers] =
+    useState<Profile[]>([]);
 
-  const [categoryForm, setCategoryForm] = useState({
-    ...EMPTY_CATEGORY_FORM,
-  });
+  const [coupons, setCoupons] =
+    useState<Coupon[]>([]);
 
-  const [couponForm, setCouponForm] = useState({
-    ...EMPTY_COUPON_FORM,
-  });
+  const [reviews, setReviews] =
+    useState<AdminReview[]>([]);
+
+  const [dataLoading, setDataLoading] =
+    useState(false);
+
+  const [showProductForm, setShowProductForm] =
+    useState(false);
+
+  const [showCategoryForm, setShowCategoryForm] =
+    useState(false);
+
+  const [showCouponForm, setShowCouponForm] =
+    useState(false);
+
+  const [editingProduct, setEditingProduct] =
+    useState<Product | null>(null);
+
+  const [editingCategory, setEditingCategory] =
+    useState<Category | null>(null);
+
+  const [productForm, setProductForm] =
+    useState<ProductForm>({
+      ...EMPTY_PRODUCT_FORM,
+    });
+
+  const [categoryForm, setCategoryForm] =
+    useState<CategoryForm>({
+      ...EMPTY_CATEGORY_FORM,
+    });
+
+  const [couponForm, setCouponForm] =
+    useState<CouponForm>({
+      ...EMPTY_COUPON_FORM,
+    });
 
   const productImageInputRef =
     useRef<HTMLInputElement>(null);
 
   const categoryImageInputRef =
     useRef<HTMLInputElement>(null);
+
+  const isAdmin =
+    Boolean(user) &&
+    profile?.role === 'admin';
 
   /*
    * ============================================================
@@ -191,11 +288,11 @@ export default function Admin() {
   const handleProductImages = (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
-    const files = Array.from(e.target.files ?? []);
+    const files = Array.from(
+      e.target.files ?? [],
+    );
 
-    if (!files.length) {
-      return;
-    }
+    if (!files.length) return;
 
     const validFiles: File[] = [];
 
@@ -219,12 +316,19 @@ export default function Admin() {
       validFiles.push(file);
     }
 
-    setProductForm((prev) => ({
-      ...prev,
+    setProductForm((previous) => ({
+      ...previous,
       images: [
-        ...prev.images,
+        ...previous.images,
         ...validFiles,
-      ].slice(0, 6),
+      ].slice(
+        0,
+        Math.max(
+          0,
+          6 -
+            previous.existingImages.length,
+        ),
+      ),
     }));
 
     e.target.value = '';
@@ -232,18 +336,17 @@ export default function Admin() {
 
   /*
    * ============================================================
-   * CATEGORY IMAGE SELECTION
+   * CATEGORY IMAGE
    * ============================================================
    */
 
   const handleCategoryImage = (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
-    const file = e.target.files?.[0];
+    const file =
+      e.target.files?.[0];
 
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
       toast(
@@ -263,8 +366,8 @@ export default function Admin() {
       return;
     }
 
-    setCategoryForm((prev) => ({
-      ...prev,
+    setCategoryForm((previous) => ({
+      ...previous,
       image: file,
     }));
 
@@ -273,313 +376,440 @@ export default function Admin() {
 
   /*
    * ============================================================
-   * LOAD PRODUCTS
+   * PRODUCTS
    * ============================================================
    */
 
-  const refreshProducts = useCallback(async () => {
-    try {
-      const data = await getProducts({
-        limit: 100,
-      });
+  const refreshProducts =
+    useCallback(async () => {
+      try {
+        const data =
+          await getProducts({
+            limit: 100,
+          });
 
-      setProducts(data);
-    } catch (error) {
-      console.error(
-        'Failed to load products:',
-        error,
-      );
-
-      toast(
-        'Failed to load products',
-        'error',
-      );
-    }
-  }, [toast]);
-
-  /*
-   * ============================================================
-   * LOAD CATEGORIES
-   * ============================================================
-   */
-
-  const refreshCategories = useCallback(async () => {
-    try {
-      const data = await getCategories();
-
-      setCategories(data);
-    } catch (error) {
-      console.error(
-        'Failed to load categories:',
-        error,
-      );
-
-      toast(
-        'Failed to load categories',
-        'error',
-      );
-    }
-  }, [toast]);
-
-  /*
-   * ============================================================
-   * LOAD COUPONS
-   * ============================================================
-   */
-
-  const refreshCoupons = useCallback(async () => {
-    try {
-      const data = await getCoupons();
-
-      setCoupons(data);
-    } catch (error) {
-      console.error(
-        'Failed to load coupons:',
-        error,
-      );
-
-      toast(
-        'Failed to load coupons',
-        'error',
-      );
-    }
-  }, [toast]);
-
-  /*
-   * ============================================================
-   * LOAD ORDERS
-   * ============================================================
-   */
-
-  const refreshOrders = useCallback(async () => {
-    try {
-      const {
-        data,
-        error,
-      } = await supabase
-        .from('orders')
-        .select('*')
-        .order('created_at', {
-          ascending: false,
-        });
-
-      if (error) {
+        setProducts(data);
+      } catch (error) {
         console.error(
-          'Failed to load orders:',
+          'Failed to load products:',
           error,
         );
 
-        throw error;
+        toast(
+          'Failed to load products',
+          'error',
+        );
       }
-
-      setOrders(
-        (data ?? []) as Order[],
-      );
-    } catch (error) {
-      console.error(
-        'refreshOrders error:',
-        error,
-      );
-
-      toast(
-        'Failed to load orders',
-        'error',
-      );
-    }
-  }, [toast]);
+    }, [toast]);
 
   /*
    * ============================================================
-   * LOAD CUSTOMERS
+   * CATEGORIES
    * ============================================================
    */
 
-  const refreshCustomers = useCallback(async () => {
-    try {
-      const {
-        data,
-        error,
-      } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', {
-          ascending: false,
-        });
+  const refreshCategories =
+    useCallback(async () => {
+      try {
+        const data =
+          await getCategories();
 
-      if (error) {
+        setCategories(data);
+      } catch (error) {
         console.error(
-          'Failed to load customers:',
+          'Failed to load categories:',
           error,
         );
 
-        throw error;
+        toast(
+          'Failed to load categories',
+          'error',
+        );
       }
-
-      setCustomers(
-        (data ?? []) as Profile[],
-      );
-    } catch (error) {
-      console.error(
-        'refreshCustomers error:',
-        error,
-      );
-
-      toast(
-        'Failed to load customers',
-        'error',
-      );
-    }
-  }, [toast]);
+    }, [toast]);
 
   /*
    * ============================================================
-   * LOAD REVIEWS
+   * COUPONS
    * ============================================================
    */
 
-  const refreshReviews = useCallback(async () => {
-    try {
-      const {
-        data: reviewData,
-        error: reviewError,
-      } = await supabase
-        .from('reviews')
-        .select('*')
-        .order('created_at', {
-          ascending: false,
-        });
+  const refreshCoupons =
+    useCallback(async () => {
+      try {
+        const data =
+          await getCoupons();
 
-      if (reviewError) {
+        setCoupons(data);
+      } catch (error) {
         console.error(
-          'Failed to load reviews:',
-          reviewError,
+          'Failed to load coupons:',
+          error,
         );
 
-        throw reviewError;
+        toast(
+          'Failed to load coupons',
+          'error',
+        );
       }
+    }, [toast]);
 
-      const rawReviews = reviewData ?? [];
+  /*
+   * ============================================================
+   * ORDERS + PAYMENT RECONCILIATION
+   * ============================================================
+   *
+   * payments.status = success
+   * is treated as the authoritative indication
+   * that Paystack successfully processed the payment.
+   *
+   * This fixes the situation where:
+   *
+   * orders.payment_status = pending
+   *
+   * but:
+   *
+   * payments.status = success
+   *
+   * ============================================================
+   */
 
-      const productIds = [
-        ...new Set(
-          rawReviews
-            .map(
-              (review) =>
-                review.product_id,
-            )
-            .filter(Boolean),
-        ),
-      ];
-
-      const userIds = [
-        ...new Set(
-          rawReviews
-            .map(
-              (review) =>
-                review.user_id,
-            )
-            .filter(Boolean),
-        ),
-      ];
-
-      let productMap = new Map<
-        string,
-        {
-          id: string;
-          name: string;
-          slug: string;
-        }
-      >();
-
-      if (productIds.length > 0) {
+  const refreshOrders =
+    useCallback(async () => {
+      try {
         const {
-          data: productData,
-          error: productError,
+          data: orderData,
+          error: orderError,
         } = await supabase
-          .from('products')
-          .select('id,name,slug')
-          .in('id', productIds);
+          .from('orders')
+          .select('*')
+          .order('created_at', {
+            ascending: false,
+          });
 
-        if (productError) {
-          console.error(
-            'Failed to load review products:',
-            productError,
-          );
-        } else {
-          productMap = new Map(
-            (productData ?? []).map(
-              (product) => [
-                product.id,
-                product,
-              ],
-            ),
-          );
+        if (orderError) {
+          throw orderError;
         }
+
+        const rawOrders =
+          (orderData ?? []) as Order[];
+
+        const orderIds =
+          rawOrders
+            .map(
+              (order) => order.id,
+            )
+            .filter(Boolean);
+
+        let payments: PaymentRecord[] =
+          [];
+
+        if (orderIds.length > 0) {
+          const {
+            data: paymentData,
+            error: paymentError,
+          } = await supabase
+            .from('payments')
+            .select(
+              'id,order_id,user_id,reference,amount,status,channel,created_at',
+            )
+            .in(
+              'order_id',
+              orderIds,
+            )
+            .order('created_at', {
+              ascending: false,
+            });
+
+          if (paymentError) {
+            console.error(
+              'Failed to load payments:',
+              paymentError,
+            );
+          } else {
+            payments =
+              (paymentData ??
+                []) as PaymentRecord[];
+          }
+        }
+
+        /*
+         * One order can potentially have
+         * multiple payment attempts.
+         *
+         * Always prefer a successful payment.
+         */
+
+        const paymentMap =
+          new Map<
+            string,
+            PaymentRecord
+          >();
+
+        for (const payment of payments) {
+          const existing =
+            paymentMap.get(
+              payment.order_id,
+            );
+
+          if (
+            !existing ||
+            payment.status ===
+              'success'
+          ) {
+            paymentMap.set(
+              payment.order_id,
+              payment,
+            );
+          }
+        }
+
+        const reconciledOrders =
+          rawOrders.map(
+            (order) => {
+              const payment =
+                paymentMap.get(
+                  order.id,
+                );
+
+              const successfulPayment =
+                payment?.status ===
+                'success';
+
+              const reconciledStatus =
+                successfulPayment
+                  ? 'paid'
+                  : order.payment_status ||
+                    payment?.status ||
+                    'pending';
+
+              return {
+                ...order,
+
+                payment_record:
+                  payment ?? null,
+
+                reconciled_payment_status:
+                  reconciledStatus,
+
+                payment_status:
+                  reconciledStatus,
+
+                payment_reference:
+                  order.payment_reference ||
+                  payment?.reference ||
+                  order.payment_ref ||
+                  null,
+              };
+            },
+          ) as AdminOrder[];
+
+        setOrders(
+          reconciledOrders,
+        );
+      } catch (error) {
+        console.error(
+          'refreshOrders error:',
+          error,
+        );
+
+        toast(
+          'Failed to load orders',
+          'error',
+        );
       }
+    }, [toast]);
 
-      let profileMap = new Map<
-        string,
-        {
-          id: string;
-          email: string;
-          full_name: string | null;
-        }
-      >();
+  /*
+   * ============================================================
+   * CUSTOMERS
+   * ============================================================
+   */
 
-      if (userIds.length > 0) {
+  const refreshCustomers =
+    useCallback(async () => {
+      try {
         const {
-          data: profileData,
-          error: profileError,
+          data,
+          error,
         } = await supabase
           .from('profiles')
-          .select(
-            'id,email,full_name',
-          )
-          .in('id', userIds);
+          .select('*')
+          .order('created_at', {
+            ascending: false,
+          });
 
-        if (profileError) {
-          console.error(
-            'Failed to load review profiles:',
-            profileError,
-          );
-        } else {
-          profileMap = new Map(
-            (profileData ?? []).map(
-              (reviewProfile) => [
-                reviewProfile.id,
-                reviewProfile,
-              ],
-            ),
-          );
+        if (error) {
+          throw error;
         }
+
+        setCustomers(
+          (data ??
+            []) as Profile[],
+        );
+      } catch (error) {
+        console.error(
+          'refreshCustomers error:',
+          error,
+        );
+
+        toast(
+          'Failed to load customers',
+          'error',
+        );
       }
+    }, [toast]);
 
-      const formattedReviews: AdminReview[] =
-        rawReviews.map((review) => ({
-          ...review,
-          product:
-            productMap.get(
-              review.product_id,
-            ) ?? null,
-          profile:
-            profileMap.get(
-              review.user_id,
-            ) ?? null,
-        }));
+  /*
+   * ============================================================
+   * REVIEWS
+   * ============================================================
+   */
 
-      setReviews(formattedReviews);
-    } catch (error) {
-      console.error(
-        'refreshReviews error:',
-        error,
-      );
+  const refreshReviews =
+    useCallback(async () => {
+      try {
+        const {
+          data: reviewData,
+          error: reviewError,
+        } = await supabase
+          .from('reviews')
+          .select('*')
+          .order('created_at', {
+            ascending: false,
+          });
 
-      toast(
-        'Failed to load reviews',
-        'error',
-      );
-    }
-  }, [toast]);
+        if (reviewError) {
+          throw reviewError;
+        }
+
+        const rawReviews =
+          reviewData ?? [];
+
+        const productIds = [
+          ...new Set(
+            rawReviews
+              .map(
+                (review) =>
+                  review.product_id,
+              )
+              .filter(Boolean),
+          ),
+        ];
+
+        const userIds = [
+          ...new Set(
+            rawReviews
+              .map(
+                (review) =>
+                  review.user_id,
+              )
+              .filter(Boolean),
+          ),
+        ];
+
+        const productMap =
+          new Map<
+            string,
+            {
+              id: string;
+              name: string;
+              slug: string;
+            }
+          >();
+
+        if (productIds.length) {
+          const {
+            data,
+            error,
+          } = await supabase
+            .from('products')
+            .select(
+              'id,name,slug',
+            )
+            .in(
+              'id',
+              productIds,
+            );
+
+          if (!error) {
+            for (const product of
+              data ?? []) {
+              productMap.set(
+                product.id,
+                product,
+              );
+            }
+          }
+        }
+
+        const profileMap =
+          new Map<
+            string,
+            {
+              id: string;
+              email: string;
+              full_name:
+                | string
+                | null;
+            }
+          >();
+
+        if (userIds.length) {
+          const {
+            data,
+            error,
+          } = await supabase
+            .from('profiles')
+            .select(
+              'id,email,full_name',
+            )
+            .in(
+              'id',
+              userIds,
+            );
+
+          if (!error) {
+            for (const item of
+              data ?? []) {
+              profileMap.set(
+                item.id,
+                item,
+              );
+            }
+          }
+        }
+
+        const formattedReviews =
+          rawReviews.map(
+            (review) => ({
+              ...review,
+              product:
+                productMap.get(
+                  review.product_id,
+                ) ?? null,
+              profile:
+                profileMap.get(
+                  review.user_id,
+                ) ?? null,
+            }),
+          ) as AdminReview[];
+
+        setReviews(
+          formattedReviews,
+        );
+      } catch (error) {
+        console.error(
+          'refreshReviews error:',
+          error,
+        );
+
+        toast(
+          'Failed to load reviews',
+          'error',
+        );
+      }
+    }, [toast]);
 
   /*
    * ============================================================
@@ -587,295 +817,458 @@ export default function Admin() {
    * ============================================================
    */
 
-  const loadAdminData = useCallback(async () => {
-    if (
-      !user ||
-      profile?.role !== 'admin'
-    ) {
-      return;
-    }
+  const loadAdminData =
+    useCallback(async () => {
+      if (!user || !isAdmin) {
+        return;
+      }
 
-    setDataLoading(true);
+      setDataLoading(true);
 
-    try {
-      await Promise.all([
-        refreshProducts(),
-        refreshCategories(),
-        refreshOrders(),
-        refreshCustomers(),
-        refreshReviews(),
-        refreshCoupons(),
-      ]);
-    } catch (error) {
-      console.error(
-        'Failed to load admin data:',
-        error,
-      );
-    } finally {
-      setDataLoading(false);
-    }
-  }, [
-    user,
-    profile?.role,
-    refreshProducts,
-    refreshCategories,
-    refreshOrders,
-    refreshCustomers,
-    refreshReviews,
-    refreshCoupons,
-  ]);
-
-  /*
-   * ============================================================
-   * INITIAL LOAD
-   * ============================================================
-   */
+      try {
+        await Promise.all([
+          refreshProducts(),
+          refreshCategories(),
+          refreshOrders(),
+          refreshCustomers(),
+          refreshReviews(),
+          refreshCoupons(),
+        ]);
+      } finally {
+        setDataLoading(false);
+      }
+    }, [
+      user,
+      isAdmin,
+      refreshProducts,
+      refreshCategories,
+      refreshOrders,
+      refreshCustomers,
+      refreshReviews,
+      refreshCoupons,
+    ]);
 
   useEffect(() => {
-    if (
-      !user ||
-      profile?.role !== 'admin'
-    ) {
+    if (!user || !isAdmin) {
       return;
     }
 
     void loadAdminData();
   }, [
     user,
-    profile?.role,
+    isAdmin,
     loadAdminData,
   ]);
 
   /*
    * ============================================================
-   * REALTIME
+   * ADMIN REALTIME
    * ============================================================
    */
 
   useRealtimeAdmin({
-    onOrdersChange: refreshOrders,
-    onCustomersChange: refreshCustomers,
-    onReviewsChange: refreshReviews,
+    onOrdersChange:
+      refreshOrders,
+
+    onCustomersChange:
+      refreshCustomers,
+
+    onReviewsChange:
+      refreshReviews,
   });
 
   /*
    * ============================================================
-   * AUTH GUARDS
+   * PAYMENT REALTIME
    * ============================================================
    */
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <RefreshCw className="w-6 h-6 animate-spin text-gold-400" />
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!user || !isAdmin) {
+      return;
+    }
 
-  if (!user) {
-    return (
-      <Navigate
-        to="/login"
-        replace
-      />
-    );
-  }
+    const channel =
+      supabase
+        .channel(
+          `admin-payment-sync-${user.id}`,
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'payments',
+          },
+          () => {
+            void refreshOrders();
+          },
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'orders',
+          },
+          () => {
+            void refreshOrders();
+          },
+        )
+        .subscribe();
 
-  if (
-    profile &&
-    profile.role !== 'admin'
-  ) {
-    return (
-      <Navigate
-        to="/dashboard"
-        replace
-      />
-    );
-  }
+    return () => {
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    user,
+    isAdmin,
+    refreshOrders,
+  ]);
 
   /*
    * ============================================================
-   * CREATE PRODUCT
+   * CREATE / UPDATE PRODUCT
    * ============================================================
    */
 
-  const handleCreateProduct = async (
-    e: React.FormEvent,
-  ) => {
-    e.preventDefault();
+  const handleSaveProduct =
+    async (
+      e: React.FormEvent,
+    ) => {
+      e.preventDefault();
 
-    const name =
-      productForm.name.trim();
+      const name =
+        productForm.name.trim();
 
-    const description =
-      productForm.description.trim();
+      const description =
+        productForm.description.trim();
 
-    const price = Number(
-      productForm.price,
-    );
+      const price =
+        Number(productForm.price);
 
-    const stock = Number(
-      productForm.stock,
-    );
+      const stock =
+        Number(productForm.stock);
 
-    const compareAtPrice =
-      productForm.compare_at_price
-        ? Number(
-            productForm.compare_at_price,
-          )
-        : null;
+      const compareAtPrice =
+        productForm.compare_at_price
+          ? Number(
+              productForm.compare_at_price,
+            )
+          : null;
 
-    if (!name) {
-      toast(
-        'Product name is required',
-        'error',
-      );
-      return;
-    }
-
-    if (!description) {
-      toast(
-        'Product description is required',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      !Number.isFinite(price) ||
-      price < 0
-    ) {
-      toast(
-        'Enter a valid product price',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      compareAtPrice !== null &&
-      (!Number.isFinite(
-        compareAtPrice,
-      ) ||
-        compareAtPrice < 0)
-    ) {
-      toast(
-        'Enter a valid compare-at price',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      !Number.isInteger(stock) ||
-      stock < 0
-    ) {
-      toast(
-        'Enter a valid stock quantity',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      productForm.images.length === 0
-    ) {
-      toast(
-        'Please select at least one product image',
-        'error',
-      );
-      return;
-    }
-
-    try {
-      const productId =
-        crypto.randomUUID();
-
-      const uploadedImages =
-        await Promise.all(
-          productForm.images.map(
-            (file) =>
-              uploadProductImage(
-                file,
-                productId,
-              ),
-          ),
+      if (!name) {
+        toast(
+          'Product name is required',
+          'error',
         );
-
-      const {
-        error,
-      } = await supabase
-        .from('products')
-        .insert({
-          id: productId,
-          name,
-          slug: slugify(name),
-          description,
-          price,
-          compare_at_price:
-            compareAtPrice,
-          category_id:
-            productForm.category_id ||
-            null,
-          images: uploadedImages,
-          sizes: productForm.sizes
-            .split(',')
-            .map((size) =>
-              size.trim(),
-            )
-            .filter(Boolean),
-          colors: productForm.colors
-            .split(',')
-            .map((color) =>
-              color.trim(),
-            )
-            .filter(Boolean),
-          stock,
-          badge:
-            productForm.badge ||
-            null,
-          is_featured:
-            productForm.is_featured,
-          is_new:
-            productForm.is_new,
-          is_bestseller:
-            productForm.is_bestseller,
-          is_trending:
-            productForm.is_trending,
-          is_limited:
-            productForm.is_limited,
-          rating: 0,
-          review_count: 0,
-        });
-
-      if (error) {
-        throw error;
+        return;
       }
 
-      toast(
-        'Product created successfully',
-      );
+      if (!description) {
+        toast(
+          'Product description is required',
+          'error',
+        );
+        return;
+      }
 
-      setShowProductForm(false);
+      if (
+        !Number.isFinite(price) ||
+        price < 0
+      ) {
+        toast(
+          'Enter a valid price',
+          'error',
+        );
+        return;
+      }
 
-      setProductForm({
-        ...EMPTY_PRODUCT_FORM,
-        images: [],
-      });
+      if (
+        !Number.isInteger(stock) ||
+        stock < 0
+      ) {
+        toast(
+          'Enter a valid stock quantity',
+          'error',
+        );
+        return;
+      }
 
-      await refreshProducts();
-    } catch (error) {
-      console.error(
-        'Failed to create product:',
-        error,
-      );
+      try {
+        let productId =
+          editingProduct?.id ??
+          crypto.randomUUID();
 
-      toast(
-        'Failed to create product',
-        'error',
-      );
-    }
+        let finalImages =
+          productForm.existingImages;
+
+        if (
+          productForm.images.length
+        ) {
+          const uploaded =
+            await Promise.all(
+              productForm.images.map(
+                (file) =>
+                  uploadProductImage(
+                    file,
+                    productId,
+                  ),
+              ),
+            );
+
+          finalImages = [
+            ...finalImages,
+            ...uploaded,
+          ].slice(0, 6);
+        }
+
+        if (!editingProduct) {
+          if (
+            finalImages.length ===
+            0
+          ) {
+            toast(
+              'Please select at least one product image',
+              'error',
+            );
+            return;
+          }
+
+          const {
+            error,
+          } = await supabase
+            .from('products')
+            .insert({
+              id: productId,
+              name,
+              slug: slugify(name),
+              description,
+              price,
+              compare_at_price:
+                compareAtPrice,
+              category_id:
+                productForm.category_id ||
+                null,
+              images: finalImages,
+              sizes:
+                productForm.sizes
+                  .split(',')
+                  .map((x) =>
+                    x.trim(),
+                  )
+                  .filter(Boolean),
+              colors:
+                productForm.colors
+                  .split(',')
+                  .map((x) =>
+                    x.trim(),
+                  )
+                  .filter(Boolean),
+              stock,
+              badge:
+                productForm.badge ||
+                null,
+              is_featured:
+                productForm.is_featured,
+              is_new:
+                productForm.is_new,
+              is_bestseller:
+                productForm.is_bestseller,
+              is_trending:
+                productForm.is_trending,
+              is_limited:
+                productForm.is_limited,
+              rating: 0,
+              review_count: 0,
+            });
+
+          if (error) {
+            throw error;
+          }
+
+          toast(
+            'Product created successfully',
+          );
+        } else {
+          await updateProduct(
+            editingProduct.id,
+            {
+              name,
+              slug: slugify(name),
+              description,
+              price,
+              compare_at_price:
+                compareAtPrice,
+              category_id:
+                productForm.category_id ||
+                null,
+              images: finalImages,
+              sizes:
+                productForm.sizes
+                  .split(',')
+                  .map((x) =>
+                    x.trim(),
+                  )
+                  .filter(Boolean),
+              colors:
+                productForm.colors
+                  .split(',')
+                  .map((x) =>
+                    x.trim(),
+                  )
+                  .filter(Boolean),
+              stock,
+              badge:
+                productForm.badge ||
+                null,
+              is_featured:
+                productForm.is_featured,
+              is_new:
+                productForm.is_new,
+              is_bestseller:
+                productForm.is_bestseller,
+              is_trending:
+                productForm.is_trending,
+              is_limited:
+                productForm.is_limited,
+            } as Partial<Product>,
+          );
+
+          toast(
+            'Product updated successfully',
+          );
+        }
+
+        setEditingProduct(null);
+        setShowProductForm(false);
+
+        setProductForm({
+          ...EMPTY_PRODUCT_FORM,
+        });
+
+        await refreshProducts();
+      } catch (error) {
+        console.error(
+          'Failed to save product:',
+          error,
+        );
+
+        toast(
+          'Failed to save product',
+          'error',
+        );
+      }
+    };
+
+  /*
+   * ============================================================
+   * OPEN PRODUCT EDITOR
+   * ============================================================
+   */
+
+  const openEditProduct = (
+    product: Product,
+  ) => {
+    setEditingProduct(
+      product,
+    );
+
+    setProductForm({
+      name: product.name ?? '',
+      description:
+        product.description ?? '',
+      price: String(
+        product.price ?? '',
+      ),
+      compare_at_price:
+        product.compare_at_price !=
+        null
+          ? String(
+              product.compare_at_price,
+            )
+          : '',
+      category_id:
+        product.category_id ?? '',
+      images: [],
+      existingImages:
+        product.images ?? [],
+      sizes:
+        Array.isArray(
+          product.sizes,
+        )
+          ? product.sizes.join(',')
+          : 'S,M,L,XL',
+      colors:
+        Array.isArray(
+          product.colors,
+        )
+          ? product.colors.join(',')
+          : 'Black,White',
+      stock: String(
+        product.stock ?? 0,
+      ),
+      badge:
+        product.badge ?? '',
+      is_featured:
+        Boolean(
+          product.is_featured,
+        ),
+      is_new:
+        Boolean(product.is_new),
+      is_bestseller:
+        Boolean(
+          product.is_bestseller,
+        ),
+      is_trending:
+        Boolean(
+          product.is_trending,
+        ),
+      is_limited:
+        Boolean(
+          product.is_limited,
+        ),
+    });
+
+    setShowProductForm(
+      true,
+    );
   };
+
+  /*
+   * ============================================================
+   * REMOVE EXISTING PRODUCT IMAGE
+   * ============================================================
+   */
+
+  const removeExistingProductImage =
+    async (
+      imageUrl: string,
+    ) => {
+      try {
+        await deleteStorageImage(
+          imageUrl,
+        );
+      } catch (error) {
+        console.error(
+          'Failed to delete storage image:',
+          error,
+        );
+      }
+
+      setProductForm(
+        (previous) => ({
+          ...previous,
+          existingImages:
+            previous.existingImages.filter(
+              (image) =>
+                image !== imageUrl,
+            ),
+        }),
+      );
+    };
 
   /*
    * ============================================================
@@ -883,60 +1276,59 @@ export default function Admin() {
    * ============================================================
    */
 
-  const handleDeleteProduct = async (
-    product: Product,
-  ) => {
-    if (
-      !window.confirm(
-        `Delete "${product.name}"?`,
-      )
-    ) {
-      return;
-    }
-
-    try {
+  const handleDeleteProduct =
+    async (
+      product: Product,
+    ) => {
       if (
-        product.images &&
-        product.images.length > 0
+        !window.confirm(
+          `Delete "${product.name}"?`,
+        )
       ) {
-        for (const imageUrl of product.images) {
-          try {
-            await deleteStorageImage(
-              imageUrl,
-            );
-          } catch (error) {
-            console.error(
-              'Failed to delete product image:',
-              error,
-            );
-          }
-        }
+        return;
       }
 
-      await deleteProduct(
-        product.id,
-      );
+      try {
+        for (const image of
+          product.images ?? []) {
+          try {
+            await deleteStorageImage(
+              image,
+            );
+          } catch {
+            // Storage cleanup failure
+            // should not block DB deletion.
+          }
+        }
 
-      setProducts((previous) =>
-        previous.filter(
-          (item) =>
-            item.id !== product.id,
-        ),
-      );
+        await deleteProduct(
+          product.id,
+        );
 
-      toast('Product deleted');
-    } catch (error) {
-      console.error(
-        'Failed to delete product:',
-        error,
-      );
+        setProducts(
+          (previous) =>
+            previous.filter(
+              (item) =>
+                item.id !==
+                product.id,
+            ),
+        );
 
-      toast(
-        'Failed to delete product',
-        'error',
-      );
-    }
-  };
+        toast(
+          'Product deleted',
+        );
+      } catch (error) {
+        console.error(
+          'Failed to delete product:',
+          error,
+        );
+
+        toast(
+          'Failed to delete product',
+          'error',
+        );
+      }
+    };
 
   /*
    * ============================================================
@@ -944,71 +1336,140 @@ export default function Admin() {
    * ============================================================
    */
 
-  const handleCreateCategory = async (
-    e: React.FormEvent,
-  ) => {
-    e.preventDefault();
+  const handleSaveCategory =
+    async (
+      e: React.FormEvent,
+    ) => {
+      e.preventDefault();
 
-    const name =
-      categoryForm.name.trim();
+      const name =
+        categoryForm.name.trim();
 
-    if (!name) {
-      toast(
-        'Category name is required',
-        'error',
-      );
-      return;
-    }
+      if (!name) {
+        toast(
+          'Category name is required',
+          'error',
+        );
+        return;
+      }
 
-    if (!categoryForm.image) {
-      toast(
-        'Please select a category image',
-        'error',
-      );
-      return;
-    }
+      try {
+        let imageUrl =
+          categoryForm.existingImage ||
+          null;
 
-    try {
-      const categoryId =
-        crypto.randomUUID();
+        const categoryId =
+          editingCategory?.id ??
+          crypto.randomUUID();
 
-      const imageUrl =
-        await uploadCategoryImage(
-          categoryForm.image,
-          categoryId,
+        if (categoryForm.image) {
+          imageUrl =
+            await uploadCategoryImage(
+              categoryForm.image,
+              categoryId,
+            );
+
+          if (
+            editingCategory &&
+            categoryForm.existingImage
+          ) {
+            try {
+              await deleteStorageImage(
+                categoryForm.existingImage,
+              );
+            } catch {
+              // Ignore storage cleanup failure.
+            }
+          }
+        }
+
+        if (editingCategory) {
+          const {
+            error,
+          } = await supabase
+            .from('categories')
+            .update({
+              name,
+              slug: slugify(name),
+              description:
+                categoryForm.description.trim(),
+              image_url: imageUrl,
+            })
+            .eq(
+              'id',
+              editingCategory.id,
+            );
+
+          if (error) {
+            throw error;
+          }
+
+          toast(
+            'Category updated successfully',
+          );
+        } else {
+          await createCategory({
+            id: categoryId,
+            name,
+            slug: slugify(name),
+            description:
+              categoryForm.description.trim(),
+            image_url: imageUrl,
+          });
+
+          toast(
+            'Category created successfully',
+          );
+        }
+
+        setEditingCategory(null);
+        setShowCategoryForm(false);
+
+        setCategoryForm({
+          ...EMPTY_CATEGORY_FORM,
+        });
+
+        await refreshCategories();
+      } catch (error) {
+        console.error(
+          'Failed to save category:',
+          error,
         );
 
-      await createCategory({
-        id: categoryId,
-        name,
-        slug: slugify(name),
-        description:
-          categoryForm.description.trim(),
-        image_url: imageUrl,
-      });
+        toast(
+          'Failed to save category',
+          'error',
+        );
+      }
+    };
 
-      toast(
-        'Category created successfully',
-      );
+  /*
+   * ============================================================
+   * OPEN CATEGORY EDITOR
+   * ============================================================
+   */
 
-      setShowCategoryForm(false);
+  const openEditCategory = (
+    category: Category,
+  ) => {
+    setEditingCategory(
+      category,
+    );
 
-      setCategoryForm({
-        ...EMPTY_CATEGORY_FORM,
-      });
+    setCategoryForm({
+      name:
+        category.name ?? '',
+      description:
+        category.description ??
+        '',
+      image: null,
+      existingImage:
+        category.image_url ?? '',
+    });
 
-      await refreshCategories();
-    } catch (error) {
-      console.error(
-        'Failed to create category:',
-        error,
-      );
-
-      toast(
-        'Failed to create category',
-        'error',
-      );
-    }
+    setShowCategoryForm(
+      true,
+    );
   };
 
   /*
@@ -1017,282 +1478,322 @@ export default function Admin() {
    * ============================================================
    */
 
-  const handleDeleteCategory = async (
-    id: string,
-  ) => {
-    if (
-      !window.confirm(
-        'Delete this category?',
-      )
-    ) {
-      return;
-    }
+  const handleDeleteCategory =
+    async (
+      category: Category,
+    ) => {
+      if (
+        !window.confirm(
+          `Delete "${category.name}"?`,
+        )
+      ) {
+        return;
+      }
 
-    try {
-      await deleteCategory(id);
+      try {
+        await deleteCategory(
+          category.id,
+        );
 
-      setCategories((previous) =>
-        previous.filter(
-          (category) =>
-            category.id !== id,
-        ),
-      );
+        if (category.image_url) {
+          try {
+            await deleteStorageImage(
+              category.image_url,
+            );
+          } catch {
+            // Ignore storage cleanup failure.
+          }
+        }
 
-      toast('Category deleted');
-    } catch (error) {
-      console.error(
-        'Failed to delete category:',
-        error,
-      );
+        setCategories(
+          (previous) =>
+            previous.filter(
+              (item) =>
+                item.id !==
+                category.id,
+            ),
+        );
 
-      toast(
-        'Failed to delete category',
-        'error',
-      );
-    }
-  };
+        toast(
+          'Category deleted',
+        );
+      } catch (error) {
+        console.error(
+          'Failed to delete category:',
+          error,
+        );
 
-  /*
-   * ============================================================
-   * CREATE COUPON
-   * ============================================================
-   */
-
-  const handleCreateCoupon = async (
-    e: React.FormEvent,
-  ) => {
-    e.preventDefault();
-
-    const code =
-      couponForm.code
-        .trim()
-        .toUpperCase();
-
-    const value = Number(
-      couponForm.value,
-    );
-
-    const minOrder = Number(
-      couponForm.min_order || 0,
-    );
-
-    if (!code) {
-      toast(
-        'Coupon code is required',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      !Number.isFinite(value) ||
-      value <= 0
-    ) {
-      toast(
-        'Enter a valid coupon value',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      couponForm.type === 'percent' &&
-      value > 100
-    ) {
-      toast(
-        'Percentage discount cannot exceed 100%',
-        'error',
-      );
-      return;
-    }
-
-    if (
-      !Number.isFinite(minOrder) ||
-      minOrder < 0
-    ) {
-      toast(
-        'Enter a valid minimum order amount',
-        'error',
-      );
-      return;
-    }
-
-    try {
-      await createCoupon({
-        code,
-        type:
-          couponForm.type as
-            | 'percent'
-            | 'fixed',
-        value,
-        min_order: minOrder,
-        active: true,
-        expires_at: null,
-      });
-
-      toast(
-        'Coupon created successfully',
-      );
-
-      setShowCouponForm(false);
-
-      setCouponForm({
-        ...EMPTY_COUPON_FORM,
-      });
-
-      await refreshCoupons();
-    } catch (error) {
-      console.error(
-        'Failed to create coupon:',
-        error,
-      );
-
-      toast(
-        'Failed to create coupon',
-        'error',
-      );
-    }
-  };
+        toast(
+          'Failed to delete category',
+          'error',
+        );
+      }
+    };
 
   /*
    * ============================================================
-   * DELETE COUPON
+   * COUPONS
    * ============================================================
    */
 
-  const handleDeleteCoupon = async (
-    id: string,
-  ) => {
-    if (
-      !window.confirm(
-        'Delete this coupon?',
-      )
-    ) {
-      return;
-    }
+  const handleCreateCoupon =
+    async (
+      e: React.FormEvent,
+    ) => {
+      e.preventDefault();
 
-    try {
-      await deleteCoupon(id);
+      const code =
+        couponForm.code
+          .trim()
+          .toUpperCase();
 
-      setCoupons((previous) =>
-        previous.filter(
-          (coupon) =>
-            coupon.id !== id,
-        ),
-      );
+      const value =
+        Number(
+          couponForm.value,
+        );
 
-      toast('Coupon deleted');
-    } catch (error) {
-      console.error(
-        'Failed to delete coupon:',
-        error,
-      );
+      const minOrder =
+        Number(
+          couponForm.min_order ||
+            0,
+        );
 
-      toast(
-        'Failed to delete coupon',
-        'error',
-      );
-    }
-  };
+      if (!code) {
+        toast(
+          'Coupon code is required',
+          'error',
+        );
+        return;
+      }
+
+      if (
+        !Number.isFinite(value) ||
+        value <= 0
+      ) {
+        toast(
+          'Enter a valid coupon value',
+          'error',
+        );
+        return;
+      }
+
+      if (
+        couponForm.type ===
+          'percent' &&
+        value > 100
+      ) {
+        toast(
+          'Percentage discount cannot exceed 100%',
+          'error',
+        );
+        return;
+      }
+
+      if (
+        !Number.isFinite(
+          minOrder,
+        ) ||
+        minOrder < 0
+      ) {
+        toast(
+          'Enter a valid minimum order amount',
+          'error',
+        );
+        return;
+      }
+
+      try {
+        await createCoupon({
+          code,
+          type:
+            couponForm.type,
+          value,
+          min_order:
+            minOrder,
+          active: true,
+          expires_at: null,
+        });
+
+        toast(
+          'Coupon created successfully',
+        );
+
+        setShowCouponForm(
+          false,
+        );
+
+        setCouponForm({
+          ...EMPTY_COUPON_FORM,
+        });
+
+        await refreshCoupons();
+      } catch (error) {
+        console.error(
+          'Failed to create coupon:',
+          error,
+        );
+
+        toast(
+          'Failed to create coupon',
+          'error',
+        );
+      }
+    };
+
+  const handleDeleteCoupon =
+    async (
+      id: string,
+    ) => {
+      if (
+        !window.confirm(
+          'Delete this coupon?',
+        )
+      ) {
+        return;
+      }
+
+      try {
+        await deleteCoupon(id);
+
+        setCoupons(
+          (previous) =>
+            previous.filter(
+              (coupon) =>
+                coupon.id !== id,
+            ),
+        );
+
+        toast(
+          'Coupon deleted',
+        );
+      } catch (error) {
+        console.error(
+          'Failed to delete coupon:',
+          error,
+        );
+
+        toast(
+          'Failed to delete coupon',
+          'error',
+        );
+      }
+    };
 
   /*
    * ============================================================
-   * UPDATE ORDER STATUS
+   * ORDER STATUS
+   * ============================================================
+   *
+   * IMPORTANT:
+   *
+   * status != payment_status
+   *
+   * status:
+   * pending / processing / shipping /
+   * delivered / cancelled
+   *
+   * payment_status:
+   * pending / paid / failed
+   *
    * ============================================================
    */
 
-  const handleUpdateOrderStatus = async (
-    orderId: string,
-    status: OrderStatus,
-  ) => {
-    const previousOrders =
-      orders;
+  const handleUpdateOrderStatus =
+    async (
+      orderId: string,
+      status: OrderStatus,
+    ) => {
+      const previous =
+        orders;
 
-    setOrders((previous) =>
-      previous.map((order) =>
-        order.id === orderId
-          ? {
-              ...order,
-              status,
-            }
-          : order,
-      ),
-    );
-
-    try {
-      await updateOrderStatus(
-        orderId,
-        status,
+      setOrders(
+        (current) =>
+          current.map(
+            (order) =>
+              order.id ===
+              orderId
+                ? {
+                    ...order,
+                    status,
+                  }
+                : order,
+          ),
       );
 
-      toast(
-        'Order status updated',
-      );
+      try {
+        await updateOrderStatus(
+          orderId,
+          status,
+        );
 
-      await refreshOrders();
-    } catch (error) {
-      console.error(
-        'Failed to update order status:',
-        error,
-      );
+        await refreshOrders();
 
-      setOrders(previousOrders);
+        toast(
+          'Order status updated',
+        );
+      } catch (error) {
+        console.error(
+          'Failed to update order status:',
+          error,
+        );
 
-      toast(
-        'Failed to update order',
-        'error',
-      );
-    }
-  };
+        setOrders(previous);
+
+        toast(
+          'Failed to update order',
+          'error',
+        );
+      }
+    };
 
   /*
    * ============================================================
-   * TOGGLE PRODUCT FLAG
+   * PRODUCT FLAGS
    * ============================================================
    */
 
-  const handleToggleFlag = async (
-    product: Product,
-    flag: ProductFlag,
-  ) => {
-    try {
-      const currentValue =
+  const handleToggleFlag =
+    async (
+      product: Product,
+      flag: ProductFlag,
+    ) => {
+      const value =
         Boolean(product[flag]);
 
-      await updateProduct(
-        product.id,
-        {
-          [flag]: !currentValue,
-        } as Partial<Product>,
-      );
+      try {
+        await updateProduct(
+          product.id,
+          {
+            [flag]: !value,
+          } as Partial<Product>,
+        );
 
-      setProducts((previous) =>
-        previous.map((item) =>
-          item.id === product.id
-            ? {
-                ...item,
-                [flag]:
-                  !currentValue,
-              }
-            : item,
-        ),
-      );
+        setProducts(
+          (previous) =>
+            previous.map(
+              (item) =>
+                item.id ===
+                product.id
+                  ? {
+                      ...item,
+                      [flag]:
+                        !value,
+                    }
+                  : item,
+            ),
+        );
+      } catch (error) {
+        console.error(
+          'Failed to update product:',
+          error,
+        );
 
-      toast(
-        'Product updated',
-      );
-    } catch (error) {
-      console.error(
-        'Failed to update product:',
-        error,
-      );
-
-      toast(
-        'Failed to update product',
-        'error',
-      );
-    }
-  };
+        toast(
+          'Failed to update product',
+          'error',
+        );
+      }
+    };
 
   /*
    * ============================================================
@@ -1300,40 +1801,44 @@ export default function Admin() {
    * ============================================================
    */
 
-  const handleDeleteReview = async (
-    id: string,
-  ) => {
-    if (
-      !window.confirm(
-        'Delete this review?',
-      )
-    ) {
-      return;
-    }
+  const handleDeleteReview =
+    async (
+      id: string,
+    ) => {
+      if (
+        !window.confirm(
+          'Delete this review?',
+        )
+      ) {
+        return;
+      }
 
-    try {
-      await deleteReview(id);
+      try {
+        await deleteReview(id);
 
-      setReviews((previous) =>
-        previous.filter(
-          (review) =>
-            review.id !== id,
-        ),
-      );
+        setReviews(
+          (previous) =>
+            previous.filter(
+              (review) =>
+                review.id !== id,
+            ),
+        );
 
-      toast('Review deleted');
-    } catch (error) {
-      console.error(
-        'Failed to delete review:',
-        error,
-      );
+        toast(
+          'Review deleted',
+        );
+      } catch (error) {
+        console.error(
+          'Failed to delete review:',
+          error,
+        );
 
-      toast(
-        'Failed to delete review',
-        'error',
-      );
-    }
-  };
+        toast(
+          'Failed to delete review',
+          'error',
+        );
+      }
+    };
 
   /*
    * ============================================================
@@ -1342,17 +1847,29 @@ export default function Admin() {
    */
 
   const totalRevenue =
-  orders
-    .filter(
-      (order) =>
-        order.payment_status === 'paid',
-    )
-    .reduce(
-      (sum, order) =>
-        sum +
-        Number(order.total || 0),
-      0,
+    useMemo(
+      () =>
+        orders
+          .filter(
+            (order) =>
+              order.reconciled_payment_status ===
+              'paid',
+          )
+          .reduce(
+            (
+              total,
+              order,
+            ) =>
+              total +
+              Number(
+                order.total ||
+                  0,
+              ),
+            0,
+          ),
+      [orders],
     );
+
   const totalOrders =
     orders.length;
 
@@ -1366,16 +1883,18 @@ export default function Admin() {
   const totalProducts =
     products.length;
 
-const paidOrders =
-  orders.filter(
-    (order) =>
-      order.payment_status === 'paid',
-  ).length;
+  const paidOrders =
+    orders.filter(
+      (order) =>
+        order.reconciled_payment_status ===
+        'paid',
+    ).length;
+
   const pendingPayments =
     orders.filter(
       (order) =>
-        order.payment_status ===
-          'pending' &&
+        order.reconciled_payment_status !==
+          'paid' &&
         order.status !==
           'cancelled',
     ).length;
@@ -1432,6 +1951,41 @@ const paidOrders =
 
   /*
    * ============================================================
+   * AUTH
+   * ============================================================
+   */
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <RefreshCw className="w-6 h-6 animate-spin text-gold-400" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Navigate
+        to="/login"
+        replace
+      />
+    );
+  }
+
+  if (
+    profile &&
+    profile.role !== 'admin'
+  ) {
+    return (
+      <Navigate
+        to="/dashboard"
+        replace
+      />
+    );
+  }
+
+  /*
+   * ============================================================
    * RENDER
    * ============================================================
    */
@@ -1464,7 +2018,9 @@ const paidOrders =
                     key={item.id}
                     type="button"
                     onClick={() =>
-                      setTab(item.id)
+                      setTab(
+                        item.id,
+                      )
                     }
                     className={classNames(
                       'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all',
@@ -1492,11 +2048,9 @@ const paidOrders =
           </div>
         </aside>
 
-        {/* CONTENT */}
+        {/* MAIN */}
 
         <main className="lg:col-span-4">
-
-          {/* REFRESH */}
 
           <div className="flex justify-end mb-4">
             <button
@@ -1521,7 +2075,8 @@ const paidOrders =
 
           {/* DASHBOARD */}
 
-          {tab === 'dashboard' && (
+          {tab ===
+            'dashboard' && (
             <motion.div
               initial={{
                 opacity: 0,
@@ -1549,63 +2104,52 @@ const paidOrders =
 
                 <StatCard
                   label="Total Orders"
-                  value={totalOrders}
+                  value={
+                    totalOrders
+                  }
                   icon={ShoppingCart}
                   color="text-blue-400"
                 />
 
                 <StatCard
                   label="Customers"
-                  value={totalCustomers}
+                  value={
+                    totalCustomers
+                  }
                   icon={Users}
                   color="text-green-400"
                 />
 
                 <StatCard
                   label="Products"
-                  value={totalProducts}
+                  value={
+                    totalProducts
+                  }
                   icon={Package}
                   color="text-purple-400"
                 />
+
               </div>
 
               <div className="grid grid-cols-2 gap-4 mt-4">
 
-                <div className="glass rounded-2xl p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center">
-                      <CreditCard className="w-5 h-5 text-green-400" />
-                    </div>
+                <StatCard
+                  label="Paid Orders"
+                  value={
+                    paidOrders
+                  }
+                  icon={CreditCard}
+                  color="text-green-400"
+                />
 
-                    <div>
-                      <p className="text-2xl font-bold text-white">
-                        {paidOrders}
-                      </p>
-
-                      <p className="text-xs text-ink-400">
-                        Paid Orders
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="glass rounded-2xl p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-yellow-500/10 flex items-center justify-center">
-                      <Clock className="w-5 h-5 text-yellow-400" />
-                    </div>
-
-                    <div>
-                      <p className="text-2xl font-bold text-white">
-                        {pendingPayments}
-                      </p>
-
-                      <p className="text-xs text-ink-400">
-                        Pending Payments
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                <StatCard
+                  label="Pending Payments"
+                  value={
+                    pendingPayments
+                  }
+                  icon={Clock}
+                  color="text-yellow-400"
+                />
 
               </div>
 
@@ -1615,18 +2159,22 @@ const paidOrders =
                 </h2>
 
                 <div className="glass rounded-2xl overflow-hidden">
+
                   {orders
-                    .slice(0, 5)
+                    .slice(0, 8)
                     .map(
                       (
                         order,
                         index,
                       ) => (
                         <div
-                          key={order.id}
+                          key={
+                            order.id
+                          }
                           className={classNames(
                             'flex items-center justify-between p-4',
-                            index !== 0 &&
+                            index !==
+                              0 &&
                               'border-t border-white/5',
                           )}
                         >
@@ -1647,7 +2195,7 @@ const paidOrders =
                           <div className="flex items-center gap-3">
                             <PaymentStatus
                               status={
-                                order.payment_status
+                                order.reconciled_payment_status
                               }
                             />
 
@@ -1664,12 +2212,12 @@ const paidOrders =
                       ),
                     )}
 
-                  {orders.length ===
-                    0 && (
+                  {!orders.length && (
                     <p className="p-6 text-center text-ink-400 text-sm">
                       No orders yet
                     </p>
                   )}
+
                 </div>
               </div>
             </motion.div>
@@ -1677,7 +2225,8 @@ const paidOrders =
 
           {/* PRODUCTS */}
 
-          {tab === 'products' && (
+          {tab ===
+            'products' && (
             <motion.div
               initial={{
                 opacity: 0,
@@ -1695,11 +2244,19 @@ const paidOrders =
 
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setEditingProduct(
+                      null,
+                    );
+
+                    setProductForm({
+                      ...EMPTY_PRODUCT_FORM,
+                    });
+
                     setShowProductForm(
                       true,
-                    )
-                  }
+                    );
+                  }}
                   className="btn-gold rounded-lg px-4 py-2 text-sm uppercase tracking-wider flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" />
@@ -1708,31 +2265,40 @@ const paidOrders =
               </div>
 
               <div className="glass rounded-2xl overflow-hidden">
+
                 {products.map(
                   (
                     product,
                     index,
                   ) => (
                     <div
-                      key={product.id}
+                      key={
+                        product.id
+                      }
                       className={classNames(
                         'flex items-center gap-4 p-4',
-                        index !== 0 &&
+                        index !==
+                          0 &&
                           'border-t border-white/5',
                       )}
                     >
                       <img
                         src={
-                          product.images?.[0] ||
+                          product
+                            .images?.[0] ||
                           '/placeholder-product.png'
                         }
-                        alt={product.name}
+                        alt={
+                          product.name
+                        }
                         className="w-12 h-16 object-cover rounded-lg shrink-0"
                       />
 
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-white truncate">
-                          {product.name}
+                          {
+                            product.name
+                          }
                         </p>
 
                         <p className="text-xs text-ink-400">
@@ -1743,17 +2309,22 @@ const paidOrders =
                             ),
                           )}{' '}
                           · Stock:{' '}
-                          {product.stock}
+                          {
+                            product.stock
+                          }
                         </p>
                       </div>
 
                       <div className="flex gap-1">
                         {PRODUCT_FLAGS.map(
-                          (flag) => (
+                          (
+                            flag,
+                          ) => (
                             <button
-                              key={flag}
+                              key={
+                                flag
+                              }
                               type="button"
-                              title={flag}
                               onClick={() =>
                                 void handleToggleFlag(
                                   product,
@@ -1761,12 +2332,12 @@ const paidOrders =
                                 )
                               }
                               className={classNames(
-                                'w-7 h-7 rounded text-[9px] font-bold transition-all',
+                                'w-7 h-7 rounded text-[9px] font-bold',
                                 product[
                                   flag
                                 ]
                                   ? 'bg-gold-400 text-ink-950'
-                                  : 'bg-ink-800 text-ink-500 hover:text-white',
+                                  : 'bg-ink-800 text-ink-500',
                               )}
                             >
                               {flag ===
@@ -1790,6 +2361,19 @@ const paidOrders =
                       <button
                         type="button"
                         onClick={() =>
+                          openEditProduct(
+                            product,
+                          )
+                        }
+                        className="text-ink-500 hover:text-gold-400"
+                        title="Edit product"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
                           void handleDeleteProduct(
                             product,
                           )
@@ -1803,19 +2387,20 @@ const paidOrders =
                   ),
                 )}
 
-                {products.length ===
-                  0 && (
+                {!products.length && (
                   <p className="p-6 text-center text-ink-400 text-sm">
                     No products
                   </p>
                 )}
+
               </div>
             </motion.div>
           )}
 
           {/* CATEGORIES */}
 
-          {tab === 'categories' && (
+          {tab ===
+            'categories' && (
             <motion.div
               initial={{
                 opacity: 0,
@@ -1833,11 +2418,19 @@ const paidOrders =
 
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setEditingCategory(
+                      null,
+                    );
+
+                    setCategoryForm({
+                      ...EMPTY_CATEGORY_FORM,
+                    });
+
                     setShowCategoryForm(
                       true,
-                    )
-                  }
+                    );
+                  }}
                   className="btn-gold rounded-lg px-4 py-2 text-sm uppercase tracking-wider flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" />
@@ -1846,10 +2439,13 @@ const paidOrders =
               </div>
 
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+
                 {categories.map(
                   (category) => (
                     <div
-                      key={category.id}
+                      key={
+                        category.id
+                      }
                       className="glass rounded-2xl overflow-hidden"
                     >
                       {category.image_url && (
@@ -1864,44 +2460,71 @@ const paidOrders =
                         />
                       )}
 
-                      <div className="p-4 flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-white">
-                            {
-                              category.name
-                            }
-                          </p>
+                      <div className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-white">
+                              {
+                                category.name
+                              }
+                            </p>
 
-                          <p className="text-xs text-ink-400">
-                            {
-                              category.slug
-                            }
-                          </p>
+                            <p className="text-xs text-ink-400">
+                              {
+                                category.slug
+                              }
+                            </p>
+                          </div>
+
+                          <div className="flex gap-3">
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openEditCategory(
+                                  category,
+                                )
+                              }
+                              className="text-ink-500 hover:text-gold-400"
+                              title="Edit category"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleDeleteCategory(
+                                  category,
+                                )
+                              }
+                              className="text-ink-500 hover:text-red-400"
+                              title="Delete category"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+
+                          </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleDeleteCategory(
-                              category.id,
-                            )
-                          }
-                          className="text-ink-500 hover:text-red-400"
-                          title="Delete category"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {category.description && (
+                          <p className="text-xs text-ink-500 mt-3 line-clamp-2">
+                            {
+                              category.description
+                            }
+                          </p>
+                        )}
                       </div>
                     </div>
                   ),
                 )}
 
-                {categories.length ===
-                  0 && (
+                {!categories.length && (
                   <p className="text-ink-400 text-sm col-span-full text-center py-8">
                     No categories
                   </p>
                 )}
+
               </div>
             </motion.div>
           )}
@@ -1919,17 +2542,29 @@ const paidOrders =
                 y: 0,
               }}
             >
-              <h1 className="font-display text-3xl font-bold text-white mb-6">
-                Manage Orders
-              </h1>
+              <div className="flex items-center justify-between mb-6">
+                <h1 className="font-display text-3xl font-bold text-white">
+                  Manage Orders
+                </h1>
+
+                <span className="text-xs text-ink-400">
+                  {
+                    orders.length
+                  } orders
+                </span>
+              </div>
 
               <div className="space-y-4">
+
                 {orders.map(
                   (order) => (
                     <div
-                      key={order.id}
+                      key={
+                        order.id
+                      }
                       className="glass rounded-2xl p-5"
                     >
+
                       <div className="flex items-start justify-between flex-wrap gap-4">
 
                         <div>
@@ -1946,27 +2581,58 @@ const paidOrders =
                           </p>
 
                           <p className="text-xs text-ink-400 mt-2">
-                            Payment ref:{' '}
-                            <span className="text-white">
-                              {order.payment_reference ||
+                            Payment reference:{' '}
+                            <span className="text-white break-all">
+                              {
+                                order.payment_reference ||
+                                order.payment_record
+                                  ?.reference ||
                                 order.payment_ref ||
-                                'N/A'}
+                                'N/A'
+                              }
                             </span>
                           </p>
 
                           <p className="text-xs text-ink-400 mt-1">
-                            Paystack TX:{' '}
+                            Provider:{' '}
                             <span className="text-white">
-                              {order.paystack_transaction_id ||
-                                'N/A'}
+                              {
+                                order
+                                  .payment_record
+                                  ?.channel ||
+                                'Paystack'
+                              }
                             </span>
                           </p>
+
+                          <p className="text-xs text-ink-400 mt-1">
+                            Transaction:{' '}
+                            <span className="text-white break-all">
+                              {
+                                order.paystack_transaction_id ||
+                                'N/A'
+                              }
+                            </span>
+                          </p>
+
+                          {order.payment_record
+                            ?.status ===
+                            'success' && (
+                            <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-green-500/10 border border-green-500/20 px-3 py-2">
+                              <CheckCircle className="w-4 h-4 text-green-400" />
+
+                              <span className="text-xs text-green-400">
+                                Paystack payment confirmed
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-3 flex-wrap">
+
                           <PaymentStatus
                             status={
-                              order.payment_status
+                              order.reconciled_payment_status
                             }
                           />
 
@@ -2016,25 +2682,58 @@ const paidOrders =
                               ),
                             )}
                           </span>
+
                         </div>
+
                       </div>
+
+                      <div className="mt-4 grid sm:grid-cols-3 gap-3">
+
+                        <InfoBox
+                          label="Order status"
+                          value={
+                            order.status ||
+                            'pending'
+                          }
+                        />
+
+                        <InfoBox
+                          label="Payment status"
+                          value={
+                            order.reconciled_payment_status ||
+                            'pending'
+                          }
+                        />
+
+                        <InfoBox
+                          label="Customer"
+                          value={
+                            getOrderCustomerName(
+                              order,
+                            )
+                          }
+                        />
+
+                      </div>
+
                     </div>
                   ),
                 )}
 
-                {orders.length ===
-                  0 && (
+                {!orders.length && (
                   <div className="glass rounded-2xl p-8 text-center text-ink-400 text-sm">
                     No orders
                   </div>
                 )}
+
               </div>
             </motion.div>
           )}
 
           {/* CUSTOMERS */}
 
-          {tab === 'customers' && (
+          {tab ===
+            'customers' && (
             <motion.div
               initial={{
                 opacity: 0,
@@ -2050,6 +2749,7 @@ const paidOrders =
               </h1>
 
               <div className="glass rounded-2xl overflow-hidden">
+
                 {customers.map(
                   (
                     customer,
@@ -2061,11 +2761,13 @@ const paidOrders =
                       }
                       className={classNames(
                         'flex items-center justify-between p-4',
-                        index !== 0 &&
+                        index !==
+                          0 &&
                           'border-t border-white/5',
                       )}
                     >
                       <div className="flex items-center gap-3">
+
                         <div className="w-10 h-10 rounded-full bg-gold-400/20 border border-gold-400/40 flex items-center justify-center text-gold-400 font-bold text-sm">
                           {(
                             customer.full_name?.[0] ??
@@ -2076,8 +2778,10 @@ const paidOrders =
 
                         <div>
                           <p className="text-sm font-medium text-white">
-                            {customer.full_name ||
-                              'Unknown'}
+                            {
+                              customer.full_name ||
+                              'Unknown'
+                            }
                           </p>
 
                           <p className="text-xs text-ink-400">
@@ -2094,38 +2798,33 @@ const paidOrders =
                             </p>
                           )}
                         </div>
+
                       </div>
 
-                      <span
-                        className={classNames(
-                          'text-xs px-3 py-1 rounded-full',
-                          customer.role ===
-                            'admin'
-                            ? 'bg-gold-400/20 text-gold-400'
-                            : 'bg-blue-500/20 text-blue-400',
-                        )}
-                      >
+                      <span className="text-xs px-3 py-1 rounded-full bg-blue-500/20 text-blue-400">
                         {
                           customer.role
                         }
                       </span>
+
                     </div>
                   ),
                 )}
 
-                {customers.length ===
-                  0 && (
+                {!customers.length && (
                   <p className="p-6 text-center text-ink-400 text-sm">
                     No customers
                   </p>
                 )}
+
               </div>
             </motion.div>
           )}
 
           {/* REVIEWS */}
 
-          {tab === 'reviews' && (
+          {tab ===
+            'reviews' && (
             <motion.div
               initial={{
                 opacity: 0,
@@ -2142,27 +2841,31 @@ const paidOrders =
                 </h1>
 
                 <span className="text-xs text-ink-400">
-                  {reviews.length}{' '}
-                  reviews
+                  {
+                    reviews.length
+                  } reviews
                 </span>
               </div>
 
               <div className="space-y-3">
+
                 {reviews.map(
                   (review) => (
                     <div
-                      key={review.id}
+                      key={
+                        review.id
+                      }
                       className="glass rounded-xl p-4"
                     >
                       <div className="flex items-start justify-between gap-4">
+
                         <div>
+
                           <div className="flex items-center gap-2 mb-1">
                             <span className="text-sm font-medium text-white">
-                              {review
-                                .profile
+                              {review.profile
                                 ?.full_name ||
-                                review
-                                  .profile
+                                review.profile
                                   ?.email
                                   ?.split(
                                     '@',
@@ -2201,10 +2904,11 @@ const paidOrders =
                           </div>
 
                           <p className="text-xs text-gold-400">
-                            {review
-                              .product
-                              ?.name ||
-                              'Product unavailable'}
+                            {
+                              review
+                                .product
+                                ?.name
+                            }
                           </p>
 
                           {review.title && (
@@ -2226,6 +2930,7 @@ const paidOrders =
                               review.created_at,
                             )}
                           </p>
+
                         </div>
 
                         <button
@@ -2236,28 +2941,29 @@ const paidOrders =
                             )
                           }
                           className="text-ink-500 hover:text-red-400"
-                          title="Delete review"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+
                       </div>
                     </div>
                   ),
                 )}
 
-                {reviews.length ===
-                  0 && (
+                {!reviews.length && (
                   <div className="glass rounded-2xl p-8 text-center text-ink-400 text-sm">
                     No reviews
                   </div>
                 )}
+
               </div>
             </motion.div>
           )}
 
           {/* COUPONS */}
 
-          {tab === 'coupons' && (
+          {tab ===
+            'coupons' && (
             <motion.div
               initial={{
                 opacity: 0,
@@ -2288,13 +2994,18 @@ const paidOrders =
               </div>
 
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+
                 {coupons.map(
                   (coupon) => (
                     <div
-                      key={coupon.id}
+                      key={
+                        coupon.id
+                      }
                       className="glass rounded-2xl p-5"
                     >
+
                       <div className="flex items-start justify-between mb-3">
+
                         <Ticket className="w-6 h-6 text-gold-400" />
 
                         <button
@@ -2305,10 +3016,10 @@ const paidOrders =
                             )
                           }
                           className="text-ink-500 hover:text-red-400"
-                          title="Delete coupon"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+
                       </div>
 
                       <p className="text-lg font-mono font-bold text-white">
@@ -2339,49 +3050,50 @@ const paidOrders =
                         )}
                       </p>
 
-                      <span
-                        className={classNames(
-                          'inline-block mt-2 text-xs px-2 py-0.5 rounded-full',
-                          coupon.active
-                            ? 'bg-green-500/20 text-green-400'
-                            : 'bg-red-500/20 text-red-400',
-                        )}
-                      >
-                        {coupon.active
-                          ? 'Active'
-                          : 'Inactive'}
-                      </span>
                     </div>
                   ),
                 )}
 
-                {coupons.length ===
-                  0 && (
+                {!coupons.length && (
                   <p className="text-ink-400 text-sm col-span-full text-center py-8">
                     No coupons
                   </p>
                 )}
+
               </div>
             </motion.div>
           )}
+
         </main>
       </div>
 
-      {/* PRODUCT MODAL */}
+      {/* ========================================================
+          PRODUCT MODAL
+      ======================================================== */}
 
       {showProductForm && (
         <Modal
-          title="Add Product"
-          onClose={() =>
-            setShowProductForm(false)
+          title={
+            editingProduct
+              ? 'Edit Product'
+              : 'Add Product'
           }
+          onClose={() => {
+            setShowProductForm(
+              false,
+            );
+            setEditingProduct(
+              null,
+            );
+          }}
         >
           <form
             onSubmit={
-              handleCreateProduct
+              handleSaveProduct
             }
             className="space-y-4"
           >
+
             <input
               type="text"
               required
@@ -2389,12 +3101,12 @@ const paidOrders =
               value={
                 productForm.name
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setProductForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     name:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2408,12 +3120,12 @@ const paidOrders =
               value={
                 productForm.description
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setProductForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     description:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2423,21 +3135,22 @@ const paidOrders =
             />
 
             <div className="grid grid-cols-2 gap-4">
+
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 required
-                placeholder="Price (NGN)"
+                placeholder="Price"
                 value={
                   productForm.price
                 }
-                onChange={(event) =>
+                onChange={(e) =>
                   setProductForm(
-                    (previous) => ({
-                      ...previous,
+                    (p) => ({
+                      ...p,
                       price:
-                        event.target
+                        e.target
                           .value,
                     }),
                   )
@@ -2453,30 +3166,31 @@ const paidOrders =
                 value={
                   productForm.compare_at_price
                 }
-                onChange={(event) =>
+                onChange={(e) =>
                   setProductForm(
-                    (previous) => ({
-                      ...previous,
+                    (p) => ({
+                      ...p,
                       compare_at_price:
-                        event.target
+                        e.target
                           .value,
                     }),
                   )
                 }
                 className="input-field"
               />
+
             </div>
 
             <select
               value={
                 productForm.category_id
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setProductForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     category_id:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2484,17 +3198,18 @@ const paidOrders =
               className="input-field"
             >
               <option value="">
-                Select Category
+                No Category
               </option>
 
               {categories.map(
                 (category) => (
                   <option
-                    key={category.id}
+                    key={
+                      category.id
+                    }
                     value={
                       category.id
                     }
-                    className="bg-ink-900"
                   >
                     {
                       category.name
@@ -2504,88 +3219,148 @@ const paidOrders =
               )}
             </select>
 
-            <div className="space-y-3">
-              <label className="block text-sm font-medium text-white">
-                Product Images
-              </label>
+            {/* EXISTING IMAGES */}
 
-              <input
-                ref={
-                  productImageInputRef
-                }
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                multiple
-                onChange={
-                  handleProductImages
-                }
-                className="hidden"
-              />
-
-              <button
-                type="button"
-                onClick={() =>
-                  productImageInputRef.current?.click()
-                }
-                className="w-full rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-8 text-center text-sm text-ink-300 hover:border-gold-400/50 hover:bg-white/10"
-              >
-                Click to upload product images
-
-                <span className="block text-xs text-ink-500 mt-1">
-                  JPG, PNG, WEBP or GIF · Maximum
-                  5MB each · Up to 6 images
-                </span>
-              </button>
-
-              {productForm.images.length >
+            {editingProduct &&
+              productForm
+                .existingImages
+                .length >
                 0 && (
-                <div className="grid grid-cols-3 gap-3">
-                  {productForm.images.map(
-                    (
-                      file,
-                      index,
-                    ) => (
-                      <ProductImagePreview
-                        key={`${file.name}-${file.lastModified}-${index}`}
-                        file={file}
-                        index={index}
-                        onRemove={() =>
-                          setProductForm(
-                            (previous) => ({
-                              ...previous,
-                              images:
-                                previous.images.filter(
-                                  (
-                                    _,
-                                    imageIndex,
-                                  ) =>
-                                    imageIndex !==
-                                    index,
-                                ),
-                            }),
-                          )
-                        }
-                      />
-                    ),
-                  )}
+                <div>
+                  <p className="text-sm text-white mb-2">
+                    Existing Images
+                  </p>
+
+                  <div className="grid grid-cols-3 gap-3">
+
+                    {productForm.existingImages.map(
+                      (
+                        image,
+                        index,
+                      ) => (
+                        <div
+                          key={
+                            image
+                          }
+                          className="relative aspect-square rounded-xl overflow-hidden"
+                        >
+                          <img
+                            src={
+                              image
+                            }
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void removeExistingProductImage(
+                                image,
+                              )
+                            }
+                            className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white hover:bg-red-500"
+                          >
+                            <X className="w-4 h-4 mx-auto" />
+                          </button>
+
+                          {index ===
+                            0 && (
+                            <span className="absolute bottom-2 left-2 text-[10px] bg-gold-400 text-black px-2 py-1 rounded">
+                              Main
+                            </span>
+                          )}
+                        </div>
+                      ),
+                    )}
+
+                  </div>
                 </div>
               )}
-            </div>
+
+            <input
+              ref={
+                productImageInputRef
+              }
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={
+                handleProductImages
+              }
+              className="hidden"
+            />
+
+            <button
+              type="button"
+              onClick={() =>
+                productImageInputRef.current?.click()
+              }
+              className="w-full rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-8 text-center text-sm text-ink-300"
+            >
+              Add Product Images
+
+              <span className="block text-xs text-ink-500 mt-1">
+                Maximum 5MB each ·
+                Maximum 6 total
+              </span>
+            </button>
+
+            {productForm.images.length >
+              0 && (
+              <div className="grid grid-cols-3 gap-3">
+
+                {productForm.images.map(
+                  (
+                    file,
+                    index,
+                  ) => (
+                    <ProductImagePreview
+                      key={`${file.name}-${file.lastModified}-${index}`}
+                      file={
+                        file
+                      }
+                      index={
+                        index
+                      }
+                      onRemove={() =>
+                        setProductForm(
+                          (p) => ({
+                            ...p,
+                            images:
+                              p.images.filter(
+                                (
+                                  _,
+                                  i,
+                                ) =>
+                                  i !==
+                                  index,
+                              ),
+                          }),
+                        )
+                      }
+                    />
+                  ),
+                )}
+
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
+
               <input
                 type="text"
                 required
-                placeholder="Sizes"
+                placeholder="Sizes: S,M,L,XL"
                 value={
                   productForm.sizes
                 }
-                onChange={(event) =>
+                onChange={(e) =>
                   setProductForm(
-                    (previous) => ({
-                      ...previous,
+                    (p) => ({
+                      ...p,
                       sizes:
-                        event.target
+                        e.target
                           .value,
                     }),
                   )
@@ -2600,36 +3375,37 @@ const paidOrders =
                 value={
                   productForm.colors
                 }
-                onChange={(event) =>
+                onChange={(e) =>
                   setProductForm(
-                    (previous) => ({
-                      ...previous,
+                    (p) => ({
+                      ...p,
                       colors:
-                        event.target
+                        e.target
                           .value,
                     }),
                   )
                 }
                 className="input-field"
               />
+
             </div>
 
             <div className="grid grid-cols-2 gap-4">
+
               <input
                 type="number"
                 min="0"
-                step="1"
                 required
                 placeholder="Stock"
                 value={
                   productForm.stock
                 }
-                onChange={(event) =>
+                onChange={(e) =>
                   setProductForm(
-                    (previous) => ({
-                      ...previous,
+                    (p) => ({
+                      ...p,
                       stock:
-                        event.target
+                        e.target
                           .value,
                     }),
                   )
@@ -2641,12 +3417,12 @@ const paidOrders =
                 value={
                   productForm.badge
                 }
-                onChange={(event) =>
+                onChange={(e) =>
                   setProductForm(
-                    (previous) => ({
-                      ...previous,
+                    (p) => ({
+                      ...p,
                       badge:
-                        event.target
+                        e.target
                           .value,
                     }),
                   )
@@ -2656,32 +3432,33 @@ const paidOrders =
                 <option value="">
                   No Badge
                 </option>
-
-                {[
-                  'New',
-                  'Sale',
-                  'Limited',
-                  'Hot',
-                  'Bestseller',
-                ].map(
-                  (badge) => (
-                    <option
-                      key={badge}
-                      value={badge}
-                      className="bg-ink-900"
-                    >
-                      {badge}
-                    </option>
-                  ),
-                )}
+                <option value="New">
+                  New
+                </option>
+                <option value="Sale">
+                  Sale
+                </option>
+                <option value="Limited">
+                  Limited
+                </option>
+                <option value="Hot">
+                  Hot
+                </option>
+                <option value="Bestseller">
+                  Bestseller
+                </option>
               </select>
+
             </div>
 
             <div className="flex flex-wrap gap-3">
+
               {PRODUCT_FLAGS.map(
                 (flag) => (
                   <label
-                    key={flag}
+                    key={
+                      flag
+                    }
                     className="flex items-center gap-2 text-xs text-ink-300"
                   >
                     <input
@@ -2692,13 +3469,13 @@ const paidOrders =
                         ]
                       }
                       onChange={(
-                        event,
+                        e,
                       ) =>
                         setProductForm(
-                          (previous) => ({
-                            ...previous,
+                          (p) => ({
+                            ...p,
                             [flag]:
-                              event
+                              e
                                 .target
                                 .checked,
                           }),
@@ -2718,35 +3495,51 @@ const paidOrders =
                   </label>
                 ),
               )}
+
             </div>
 
             <button
               type="submit"
-              className="btn-gold rounded-lg w-full py-3 text-sm uppercase tracking-wider"
+              className="btn-gold rounded-lg w-full py-3 text-sm uppercase tracking-wider flex items-center justify-center gap-2"
             >
-              Create Product
+              <Save className="w-4 h-4" />
+
+              {editingProduct
+                ? 'Save Product'
+                : 'Create Product'}
             </button>
+
           </form>
         </Modal>
       )}
 
-      {/* CATEGORY MODAL */}
+      {/* ========================================================
+          CATEGORY MODAL
+      ======================================================== */}
 
       {showCategoryForm && (
         <Modal
-          title="Add Category"
-          onClose={() =>
+          title={
+            editingCategory
+              ? 'Edit Category'
+              : 'Add Category'
+          }
+          onClose={() => {
             setShowCategoryForm(
               false,
-            )
-          }
+            );
+            setEditingCategory(
+              null,
+            );
+          }}
         >
           <form
             onSubmit={
-              handleCreateCategory
+              handleSaveCategory
             }
             className="space-y-4"
           >
+
             <input
               type="text"
               required
@@ -2754,12 +3547,12 @@ const paidOrders =
               value={
                 categoryForm.name
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setCategoryForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     name:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2772,26 +3565,37 @@ const paidOrders =
               value={
                 categoryForm.description
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setCategoryForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     description:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
               }
-              rows={2}
+              rows={3}
               className="input-field resize-none"
             />
+
+            {categoryForm.existingImage &&
+              !categoryForm.image && (
+                <img
+                  src={
+                    categoryForm.existingImage
+                  }
+                  alt=""
+                  className="w-full h-40 object-cover rounded-xl"
+                />
+              )}
 
             <input
               ref={
                 categoryImageInputRef
               }
               type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
+              accept="image/*"
               onChange={
                 handleCategoryImage
               }
@@ -2803,13 +3607,14 @@ const paidOrders =
               onClick={() =>
                 categoryImageInputRef.current?.click()
               }
-              className="w-full rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-8 text-center text-sm text-ink-300 hover:border-gold-400/50 hover:bg-white/10"
+              className="w-full rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-8 text-center text-sm text-ink-300"
             >
-              Click to upload category image
+              {editingCategory
+                ? 'Replace Category Image'
+                : 'Upload Category Image'}
 
               <span className="block text-xs text-ink-500 mt-1">
-                JPG, PNG, WEBP or GIF · Maximum
-                5MB
+                Maximum 5MB
               </span>
             </button>
 
@@ -2823,15 +3628,22 @@ const paidOrders =
 
             <button
               type="submit"
-              className="btn-gold rounded-lg w-full py-3 text-sm uppercase tracking-wider"
+              className="btn-gold rounded-lg w-full py-3 text-sm uppercase tracking-wider flex items-center justify-center gap-2"
             >
-              Create Category
+              <Save className="w-4 h-4" />
+
+              {editingCategory
+                ? 'Save Category'
+                : 'Create Category'}
             </button>
+
           </form>
         </Modal>
       )}
 
-      {/* COUPON MODAL */}
+      {/* ========================================================
+          COUPON MODAL
+      ======================================================== */}
 
       {showCouponForm && (
         <Modal
@@ -2848,6 +3660,7 @@ const paidOrders =
             }
             className="space-y-4"
           >
+
             <input
               type="text"
               required
@@ -2855,12 +3668,12 @@ const paidOrders =
               value={
                 couponForm.code
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setCouponForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     code:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2872,13 +3685,15 @@ const paidOrders =
               value={
                 couponForm.type
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setCouponForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     type:
-                      event.target
-                        .value,
+                      e.target
+                        .value as
+                        | 'percent'
+                        | 'fixed',
                   }),
                 )
               }
@@ -2887,7 +3702,6 @@ const paidOrders =
               <option value="percent">
                 Percentage
               </option>
-
               <option value="fixed">
                 Fixed Amount
               </option>
@@ -2902,12 +3716,12 @@ const paidOrders =
               value={
                 couponForm.value
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setCouponForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     value:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2923,12 +3737,12 @@ const paidOrders =
               value={
                 couponForm.min_order
               }
-              onChange={(event) =>
+              onChange={(e) =>
                 setCouponForm(
-                  (previous) => ({
-                    ...previous,
+                  (p) => ({
+                    ...p,
                     min_order:
-                      event.target
+                      e.target
                         .value,
                   }),
                 )
@@ -2942,9 +3756,82 @@ const paidOrders =
             >
               Create Coupon
             </button>
+
           </form>
         </Modal>
       )}
+
+    </div>
+  );
+}
+
+/*
+ * ============================================================
+ * CUSTOMER NAME HELPER
+ * ============================================================
+ */
+
+function getOrderCustomerName(
+  order: Order,
+) {
+  const address =
+    order.shipping_address as
+      | Record<
+          string,
+          unknown
+        >
+      | null
+      | undefined;
+
+  const fullName =
+    address?.full_name ??
+    address?.fullName ??
+    address?.name;
+
+  if (
+    typeof fullName ===
+      'string' &&
+    fullName.trim()
+  ) {
+    return fullName;
+  }
+
+  const email =
+    address?.email;
+
+  if (
+    typeof email ===
+      'string' &&
+    email.trim()
+  ) {
+    return email;
+  }
+
+  return 'Customer';
+}
+
+/*
+ * ============================================================
+ * INFO BOX
+ * ============================================================
+ */
+
+function InfoBox({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl bg-white/5 border border-white/5 p-3">
+      <p className="text-[10px] uppercase tracking-wider text-ink-500">
+        {label}
+      </p>
+
+      <p className="text-xs text-white mt-1 capitalize break-all">
+        {value}
+      </p>
     </div>
   );
 }
@@ -2991,15 +3878,14 @@ function ProductImagePreview({
       <button
         type="button"
         onClick={onRemove}
-        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white hover:bg-red-500 transition"
-        title="Remove image"
+        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white hover:bg-red-500"
       >
-        ×
+        <X className="w-4 h-4 mx-auto" />
       </button>
 
       {index === 0 && (
         <span className="absolute bottom-2 left-2 text-[10px] bg-gold-400 text-black px-2 py-1 rounded">
-          Main
+          New
         </span>
       )}
     </div>
@@ -3058,7 +3944,10 @@ function PaymentStatus({
   const value =
     status || 'pending';
 
-  if (value === 'paid') {
+  if (
+    value === 'paid' ||
+    value === 'success'
+  ) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-green-500/20 text-green-400">
         <CheckCircle className="w-3 h-3" />
@@ -3153,6 +4042,7 @@ function Modal({
 }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+
       <div
         className="absolute inset-0 bg-ink-950/80 backdrop-blur-sm"
         onClick={onClose}
@@ -3167,9 +4057,11 @@ function Modal({
           opacity: 1,
           scale: 1,
         }}
-        className="relative glass-dark rounded-2xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto"
+        className="relative glass-dark rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto"
       >
-        <div className="flex items-center justify-between mb-4">
+
+        <div className="flex items-center justify-between mb-5">
+
           <h2 className="font-display text-xl font-bold text-white">
             {title}
           </h2>
@@ -3178,13 +4070,14 @@ function Modal({
             type="button"
             onClick={onClose}
             className="text-ink-400 hover:text-white"
-            title="Close"
           >
             <X className="w-5 h-5" />
           </button>
+
         </div>
 
         {children}
+
       </motion.div>
     </div>
   );

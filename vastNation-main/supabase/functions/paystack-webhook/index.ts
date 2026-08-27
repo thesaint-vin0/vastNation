@@ -341,8 +341,8 @@ if (metadataOrderId) {
   const result = await supabase
     .from('orders')
     .select(
-      'id, total, payment_status, payment_reference, payment_ref',
-    )
+  'id, user_id, total, payment_status, payment_reference, payment_ref',
+)
     .eq('id', metadataOrderId)
     .maybeSingle();
 
@@ -528,6 +528,57 @@ if (!order && !orderError) {
         },
       );
     }
+
+    /*
+ * ============================================================
+ * SYNC PAYMENT HISTORY
+ * ============================================================
+ *
+ * The orders table is the payment source of truth.
+ *
+ * The payments table is the customer's payment-history record.
+ *
+ * Paystack webhook updates both.
+ */
+
+const { error: paymentSyncError } =
+  await supabase
+    .from('payments')
+    .upsert(
+      {
+        order_id: order.id,
+        user_id: order.user_id,
+        reference,
+        amount: paidAmount,
+        status: 'success',
+        channel:
+          verifiedTransaction.channel ??
+          'paystack',
+      },
+      {
+        onConflict: 'reference',
+      },
+    );
+
+if (paymentSyncError) {
+  console.error(
+    'Failed to synchronize payment history:',
+    paymentSyncError,
+  );
+
+  /*
+   * Do NOT mark the webhook as failed here.
+   *
+   * The actual order has already been successfully
+   * verified and marked paid.
+   */
+} else {
+  console.log(
+    'Payment history synchronized:',
+    reference,
+  );
+}
+
 
     console.log(
       'Payment successfully confirmed:',
