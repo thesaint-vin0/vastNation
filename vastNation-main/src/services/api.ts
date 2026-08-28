@@ -23,7 +23,7 @@ export async function getStoreSettings(): Promise<StoreSettings> {
   if (error) throw error;
   return (data ?? {
     id: '', store_name: 'Vast Nation', store_email: '', store_phone: '', store_address: '', currency: 'NGN',
-    free_shipping_threshold: 100, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0,
+    free_shipping_threshold: 100000, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0,
     maintenance_mode: false, notify_new_order: true, notify_payment: true, notify_low_stock: true, notify_new_review: true,
   }) as StoreSettings;
 }
@@ -275,12 +275,18 @@ export async function createOrder(
   order: Omit<Order, 'id' | 'created_at'>,
   items: Omit<OrderItem, 'id' | 'created_at' | 'order_id'>[],
 ): Promise<Order> {
-  const { data, error } = await supabase.from('orders').insert(order).select().single();
-  if (error) throw error;
-  const orderItems = items.map((item) => ({ ...item, order_id: data.id }));
-  const { error: itemsError } = await supabase.from('order_items').insert(orderItems);
-  if (itemsError) throw itemsError;
-  return data;
+  const { data, error } = await supabase.rpc('create_pending_order', {
+    p_order: order,
+    p_items: items,
+  });
+
+  if (error) {
+    console.error('create_pending_order failed:', error);
+    throw new Error(error.message || 'Unable to create your order.');
+  }
+
+  if (!data) throw new Error('Unable to create your order.');
+  return data as Order;
 }
 
 export async function updateOrderPayment(

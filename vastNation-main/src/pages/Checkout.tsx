@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -15,7 +15,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
-import { createOrder, getStoreSettings } from '../services/api';
+import { createOrder } from '../services/api';
 import { initializePaystackPayment } from '../services/paystack';
 
 import {
@@ -58,7 +58,6 @@ export default function Checkout() {
 
   const [step, setStep] = useState(1);
   const [processing, setProcessing] = useState(false);
-  const [storeSettings, setStoreSettings] = useState<Awaited<ReturnType<typeof getStoreSettings>> | null>(null);
 
   /*
    * ============================================================
@@ -110,19 +109,16 @@ export default function Checkout() {
    * Below ₦100,000 = ₦2,500
    */
 
-  useEffect(() => {
-    void getStoreSettings().then(setStoreSettings).catch((error) => console.error('Failed to load store settings:', error));
-  }, []);
-
   const calculateShippingSafe = (sub: number): number => {
-    const threshold = storeSettings?.free_shipping_threshold ?? 100000;
-    if (deliveryMethod === 'express') return storeSettings?.express_shipping_fee ?? 5000;
-    return sub >= threshold ? 0 : (storeSettings?.standard_shipping_fee ?? 2500);
+    return sub >= 100 ? 0 : 2500;
   };
 
   const shipping = calculateShippingSafe(subtotal);
-  const tax = Math.max(0, (subtotal - discount) * ((storeSettings?.tax_rate ?? 0) / 100));
-  const total = Math.max(0, subtotal - discount + shipping + tax);
+
+  const total = Math.max(
+    0,
+    subtotal - discount + shipping,
+  );
 
   /*
    * ============================================================
