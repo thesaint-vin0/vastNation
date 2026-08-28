@@ -48,6 +48,9 @@ export type Coupon = {
   min_order: number;
   active: boolean;
   expires_at: string | null;
+  usage_limit: number | null;
+  per_user_limit: number | null;
+  usage_count?: number;
   created_at: string;
 };
 

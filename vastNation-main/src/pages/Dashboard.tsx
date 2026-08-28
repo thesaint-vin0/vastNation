@@ -37,6 +37,7 @@ import {
 } from '../utils/helpers';
 
 import { supabase } from '../lib/supabase';
+import { uploadProfileImage } from '../services/storage';
 import { useTheme } from '../context/ThemeContext';
 
 import type {
@@ -72,6 +73,8 @@ export default function Dashboard() {
     profile,
     signOut,
     refreshProfile,
+    changePassword,
+    deleteAccount,
   } = useAuth();
 
   const { items: wishlistItems } = useWishlist();
@@ -93,6 +96,12 @@ export default function Dashboard() {
   const [phone, setPhone] = useState('');
 
   const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const [notificationSettings, setNotificationSettings] = useState({
     order_updates: true,
@@ -768,6 +777,35 @@ export default function Dashboard() {
     }
   };
 
+  const handleProfileImage = async (file: File | undefined) => {
+    if (!file || !user?.id) return;
+    setUploadingAvatar(true);
+    try {
+      const avatarUrl = await uploadProfileImage(file, user.id);
+      await updateProfile(user.id, { avatar_url: avatarUrl });
+      await refreshProfile();
+      toast('Profile image updated!', 'success');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Failed to upload profile image', 'error');
+    } finally { setUploadingAvatar(false); }
+  };
+
+  const handleChangePassword = async () => {
+    if (newPassword.length < 8) { toast('New password must be at least 8 characters.', 'error'); return; }
+    if (newPassword !== confirmPassword) { toast('New passwords do not match.', 'error'); return; }
+    setChangingPassword(true);
+    try { await changePassword(currentPassword, newPassword); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); toast('Password changed successfully!', 'success'); }
+    catch (error) { toast(error instanceof Error ? error.message : 'Failed to change password', 'error'); }
+    finally { setChangingPassword(false); }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!window.confirm('Delete your account permanently? This cannot be undone.')) return;
+    setDeletingAccount(true);
+    try { await deleteAccount(); window.location.href = '/'; }
+    catch (error) { toast(error instanceof Error ? error.message : 'Failed to delete account', 'error'); setDeletingAccount(false); }
+  };
+
   /*
    * ============================================================
    * ADDRESS
@@ -1017,12 +1055,8 @@ export default function Dashboard() {
           <div className="glass rounded-2xl p-6 sticky top-28">
 
             <div className="flex items-center gap-3 mb-6 pb-6 border-b border-white/10">
-              <div className="w-12 h-12 rounded-full bg-gold-400/20 border border-gold-400/40 flex items-center justify-center text-gold-400 font-bold text-lg">
-                {(
-                  profile?.full_name?.[0] ??
-                  user.email?.[0] ??
-                  '?'
-                ).toUpperCase()}
+              <div className="w-12 h-12 rounded-full overflow-hidden bg-gold-400/20 border border-gold-400/40 flex items-center justify-center text-gold-400 font-bold text-lg">
+                {profile?.avatar_url ? <img src={profile.avatar_url} alt="Profile" className="w-full h-full object-cover" /> : (profile?.full_name?.[0] ?? user.email?.[0] ?? '?').toUpperCase()}
               </div>
 
               <div className="min-w-0">
@@ -1315,6 +1349,18 @@ export default function Dashboard() {
               </h1>
 
               <div className="glass rounded-2xl p-6 max-w-lg">
+                <div className="mb-6 flex items-center gap-4">
+                  <div className="w-20 h-20 rounded-full overflow-hidden bg-gold-400/10 border border-gold-400/30 flex items-center justify-center text-gold-400 text-2xl font-bold">
+                    {profile?.avatar_url ? <img src={profile.avatar_url} alt="Profile" className="w-full h-full object-cover" /> : (profile?.full_name?.[0] ?? user.email?.[0] ?? '?').toUpperCase()}
+                  </div>
+                  <div>
+                    <label className="btn-gold rounded-lg px-4 py-2 text-xs cursor-pointer inline-flex items-center gap-2">
+                      {uploadingAvatar ? 'Uploading…' : 'Upload photo'}
+                      <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" disabled={uploadingAvatar} onChange={(e) => void handleProfileImage(e.target.files?.[0])} />
+                    </label>
+                    <p className="text-xs text-ink-500 mt-2">JPG, PNG, WEBP or GIF · max 5MB</p>
+                  </div>
+                </div>
                 <div className="space-y-4">
 
                   <div>
@@ -2044,9 +2090,23 @@ export default function Dashboard() {
                     </label>
                   ))}
                 </div>
-                <div className="pt-6 border-t border-white/10">
-                  <h3 className="text-sm font-semibold text-white mb-2">Danger Zone</h3>
-                  <button type="button" onClick={handleSignOut} className="text-sm text-red-400 hover:text-red-300 transition-colors flex items-center gap-2"><LogOut className="w-4 h-4" />Sign out of all devices</button>
+                <div className="pt-6 border-t border-white/10 space-y-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white mb-3">Change Password</h3>
+                    <div className="space-y-3">
+                      <input type="password" placeholder="Current password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="input-field" autoComplete="current-password" />
+                      <input type="password" placeholder="New password (8+ characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="input-field" autoComplete="new-password" />
+                      <input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="input-field" autoComplete="new-password" />
+                      <button type="button" onClick={() => void handleChangePassword()} disabled={changingPassword} className="btn-gold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{changingPassword ? 'Changing…' : 'Change Password'}</button>
+                    </div>
+                  </div>
+                  <div className="pt-5 border-t border-white/10">
+                    <h3 className="text-sm font-semibold text-white mb-2">Account</h3>
+                    <div className="flex flex-wrap gap-4">
+                      <button type="button" onClick={() => void handleSignOut()} className="text-sm text-ink-300 hover:text-white flex items-center gap-2"><LogOut className="w-4 h-4" />Log out</button>
+                      <button type="button" onClick={() => void handleDeleteAccount()} disabled={deletingAccount} className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50">{deletingAccount ? 'Deleting…' : 'Delete account'}</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </motion.div>

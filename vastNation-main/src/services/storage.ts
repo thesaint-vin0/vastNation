@@ -110,3 +110,16 @@ export async function deleteStorageImage(
   }
 }
 
+
+
+export async function uploadProfileImage(file: File, userId: string): Promise<string> {
+  validateImage(file);
+  const fileName = createFileName(file);
+  const path = `profiles/${userId}/${fileName}`;
+  const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
+    cacheControl: '3600', upsert: false, contentType: file.type,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}

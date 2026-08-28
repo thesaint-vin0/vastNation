@@ -529,6 +529,20 @@ if (!order && !orderError) {
       );
     }
 
+    // Increment coupon usage only after a verified payment.
+    // This keeps usage counts tied to successful orders.
+    const { data: couponOrder } = await supabase
+      .from('orders')
+      .select('coupon_code')
+      .eq('id', order.id)
+      .maybeSingle();
+    if (couponOrder?.coupon_code) {
+      const { data: coupon } = await supabase.from('coupons').select('id, usage_count').eq('code', couponOrder.coupon_code).maybeSingle();
+      if (coupon) {
+        await supabase.from('coupons').update({ usage_count: Number(coupon.usage_count ?? 0) + 1 }).eq('id', coupon.id);
+      }
+    }
+
     /*
  * ============================================================
  * SYNC PAYMENT HISTORY

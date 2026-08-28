@@ -1,373 +1,57 @@
-import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import {
-  Bell,
-  Lock,
-  Mail,
-  Moon,
-  Shield,
-  Trash2,
-  User,
-  X,
-} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, Navigate } from 'react-router-dom';
+import { ArrowLeft, Bell, Camera, LogOut, Save, Shield, Store, Trash2, UserPlus, Lock } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import {
-  getUserSettings,
-  updateProfile,
-  upsertUserSettings,
-  type UserSettings,
-} from '../services/api';
-import { supabase } from '../lib/supabase';
+import { formatNaira } from '../utils/helpers';
+import { uploadProfileImage } from '../services/storage';
 
-const DEFAULT_SETTINGS: Omit<UserSettings, 'user_id' | 'updated_at'> = {
-  order_updates: true,
-  payment_updates: true,
-  shipping_updates: true,
-  product_alerts: false,
-  newsletter: true,
-  promotional_offers: false,
-  theme: 'dark',
+type StoreSettings = {
+  id: string; store_name: string; store_email: string; store_phone: string; store_address: string;
+  currency: string; free_shipping_threshold: number; standard_shipping_fee: number; express_shipping_fee: number;
+  tax_rate: number; maintenance_mode: boolean; notify_new_order: boolean; notify_payment: boolean; notify_low_stock: boolean; notify_new_review: boolean;
 };
+const defaults: StoreSettings = { id: '', store_name: 'Vast Nation', store_email: '', store_phone: '', store_address: '', currency: 'NGN', free_shipping_threshold: 100000, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0, maintenance_mode: false, notify_new_order: true, notify_payment: true, notify_low_stock: true, notify_new_review: true };
 
-export default function AccountSettings() {
-  const { user, profile, refreshProfile, signOut } = useAuth();
+export default function AdminSettings() {
+  const { user, profile, loading: authLoading, signOut, refreshProfile, changePassword, deleteAccount } = useAuth();
   const { toast } = useToast();
+  const [settings, setSettings] = useState<StoreSettings>(defaults);
+  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false);
+  const [fullName, setFullName] = useState(''); const [phone, setPhone] = useState('');
+  const [uploadingAvatar, setUploadingAvatar] = useState(false); const avatarRef = useRef<HTMLInputElement>(null);
+  const [currentPassword, setCurrentPassword] = useState(''); const [newPassword, setNewPassword] = useState(''); const [confirmPassword, setConfirmPassword] = useState(''); const [changingPassword, setChangingPassword] = useState(false);
+  const [newAdminEmail, setNewAdminEmail] = useState(''); const [newAdminPassword, setNewAdminPassword] = useState(''); const [newAdminName, setNewAdminName] = useState(''); const [addingAdmin, setAddingAdmin] = useState(false);
 
-  const [fullName, setFullName] = useState(profile?.full_name ?? '');
-  const [phone, setPhone] = useState(profile?.phone ?? '');
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
-  const [loading, setLoading] = useState(true);
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showDelete, setShowDelete] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState('');
-  const [deleting, setDeleting] = useState(false);
+  useEffect(() => { if (!user || profile?.role !== 'admin') return; setFullName(profile.full_name ?? ''); setPhone(profile.phone ?? ''); (async () => { const { data, error } = await supabase.from('store_settings').select('*').order('updated_at', { ascending: false }).limit(1).maybeSingle(); if (error) toast('Failed to load store settings: ' + error.message, 'error'); else if (data) setSettings(data as StoreSettings); setLoading(false); })(); }, [user, profile, toast]);
+  const update = <K extends keyof StoreSettings>(key: K, value: StoreSettings[K]) => setSettings(s => ({ ...s, [key]: value }));
+  const save = async () => { if (!user) return; setSaving(true); try { const { data, error } = await supabase.from('store_settings').upsert({ ...settings, id: settings.id || undefined, updated_by: user.id }, { onConflict: 'id' }).select().single(); if (error) throw error; setSettings(data as StoreSettings); toast('Store settings saved successfully', 'success'); } catch (e) { toast(e instanceof Error ? e.message : 'Failed to save settings', 'error'); } finally { setSaving(false); } };
+  const saveAdminProfile = async () => { if (!user) return; try { const { error } = await supabase.from('profiles').update({ full_name: fullName.trim(), phone: phone.trim() }).eq('id', user.id); if (error) throw error; await refreshProfile(); toast('Admin profile updated', 'success'); } catch (e) { toast(e instanceof Error ? e.message : 'Failed to update profile', 'error'); } };
+  const uploadAvatar = async (file?: File) => { if (!file || !user) return; setUploadingAvatar(true); try { const url = await uploadProfileImage(file, user.id); const { error } = await supabase.from('profiles').update({ avatar_url: url }).eq('id', user.id); if (error) throw error; await refreshProfile(); toast('Admin profile image updated', 'success'); } catch (e) { toast(e instanceof Error ? e.message : 'Failed to upload image', 'error'); } finally { setUploadingAvatar(false); } };
+  const handlePassword = async () => { if (newPassword.length < 8) return toast('New password must be at least 8 characters.', 'error'); if (newPassword !== confirmPassword) return toast('Passwords do not match.', 'error'); setChangingPassword(true); try { await changePassword(currentPassword, newPassword); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); toast('Password changed successfully', 'success'); } catch (e) { toast(e instanceof Error ? e.message : 'Failed to change password', 'error'); } finally { setChangingPassword(false); } };
+  const addAdmin = async () => { if (!newAdminEmail || newAdminPassword.length < 8 || !newAdminName.trim()) return toast('Enter admin name, email and a password of at least 8 characters.', 'error'); setAddingAdmin(true); try { const { data: session } = await supabase.auth.getSession(); const { error } = await supabase.functions.invoke('create-admin', { headers: { Authorization: `Bearer ${session.session?.access_token ?? ''}` }, body: { email: newAdminEmail.trim(), password: newAdminPassword, full_name: newAdminName.trim() } }); if (error) throw error; setNewAdminEmail(''); setNewAdminPassword(''); setNewAdminName(''); toast('New admin account created successfully', 'success'); } catch (e) { toast(e instanceof Error ? e.message : 'Failed to create admin', 'error'); } finally { setAddingAdmin(false); } };
+  const removeAccount = async () => { if (!window.confirm('Delete your admin account permanently? This cannot be undone.')) return; try { await deleteAccount(); window.location.href = '/'; } catch (e) { toast(e instanceof Error ? e.message : 'Failed to delete account', 'error'); } };
+  const logout = async () => { await signOut(); window.location.href = '/login'; };
 
-  useEffect(() => {
-    if (!user) return;
+  if (authLoading || loading) return <div className="min-h-screen flex items-center justify-center text-ink-400">Loading settings…</div>;
+  if (!user) return <Navigate to="/login" replace />; if (profile?.role !== 'admin') return <Navigate to="/dashboard" replace />;
 
-    setFullName(profile?.full_name ?? '');
-    setPhone(profile?.phone ?? '');
+  return <div className="section-padding py-10 min-h-screen"><div className="max-w-5xl mx-auto">
+    <div className="flex items-center justify-between gap-4 mb-8"><div><Link to="/admin" className="text-xs text-ink-400 hover:text-gold-400 flex items-center gap-1 mb-3"><ArrowLeft className="w-3.5 h-3.5" /> Back to Admin</Link><h1 className="font-display text-3xl font-bold text-white">Admin Settings</h1><p className="text-sm text-ink-400 mt-1">Manage your admin account and the Vast Nation store.</p></div><button onClick={() => void save()} disabled={saving} className="btn-gold px-5 py-3 rounded-lg flex items-center gap-2 disabled:opacity-50"><Save className="w-4 h-4" />{saving ? 'Saving…' : 'Save Store Settings'}</button></div>
 
-    let mounted = true;
-    (async () => {
-      try {
-        const result = await getUserSettings(user.id);
-        if (mounted && result) {
-          setSettings({
-            order_updates: result.order_updates,
-            payment_updates: result.payment_updates,
-            shipping_updates: result.shipping_updates,
-            product_alerts: result.product_alerts,
-            newsletter: result.newsletter,
-            promotional_offers: result.promotional_offers,
-            theme: result.theme,
-          });
-        }
-      } catch (error) {
-        console.error('Failed to load account settings:', error);
-        if (mounted) toast('Failed to load settings', 'error');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
+    <section className="glass rounded-2xl p-6 mb-6"><div className="flex items-center gap-3 mb-5"><Shield className="text-gold-400" /><div><h2 className="font-semibold text-white">Admin Profile</h2><p className="text-xs text-ink-400">Your administrator identity and profile photo.</p></div></div><div className="flex items-center gap-5 mb-6"><div className="w-24 h-24 rounded-full overflow-hidden border border-gold-400/30 bg-gold-400/10 flex items-center justify-center text-gold-400 text-2xl font-bold">{profile.avatar_url ? <img src={profile.avatar_url} alt="Admin profile" className="w-full h-full object-cover" /> : (profile.full_name?.[0] ?? user.email[0] ?? 'A').toUpperCase()}</div><div><button type="button" onClick={() => avatarRef.current?.click()} disabled={uploadingAvatar} className="btn-gold rounded-lg px-4 py-2 text-xs flex items-center gap-2"><Camera className="w-4 h-4" />{uploadingAvatar ? 'Uploading…' : 'Upload profile image'}</button><input ref={avatarRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={e => void uploadAvatar(e.target.files?.[0])}/><p className="text-xs text-ink-500 mt-2">Maximum 5MB.</p></div></div><div className="grid sm:grid-cols-2 gap-4"><label className="text-sm text-ink-300">Full name<input className="input-field mt-2" value={fullName} onChange={e => setFullName(e.target.value)} /></label><label className="text-sm text-ink-300">Email<input className="input-field mt-2 opacity-60" value={user.email} disabled /></label><label className="text-sm text-ink-300">Phone<input className="input-field mt-2" value={phone} onChange={e => setPhone(e.target.value)} /></label></div><button type="button" onClick={() => void saveAdminProfile()} className="mt-4 px-4 py-2 rounded-lg bg-white/10 text-white text-sm hover:bg-white/15">Save Admin Profile</button></section>
 
-    return () => {
-      mounted = false;
-    };
-  }, [user, profile, toast]);
+    <section className="glass rounded-2xl p-6 mb-6"><div className="flex items-center gap-3 mb-5"><Store className="text-gold-400" /><div><h2 className="font-semibold text-white">Store Information</h2><p className="text-xs text-ink-400">Customer-facing store configuration.</p></div></div><div className="grid sm:grid-cols-2 gap-4">{([['store_name','Store name'],['store_email','Store email'],['store_phone','Store phone'],['currency','Currency']] as const).map(([key,label]) => <label key={key} className="text-sm text-ink-300">{label}<input className="input-field mt-2" value={settings[key] as string} onChange={e => update(key,e.target.value)} /></label>)}<label className="sm:col-span-2 text-sm text-ink-300">Store address<textarea className="input-field mt-2 min-h-24" value={settings.store_address} onChange={e => update('store_address',e.target.value)} /></label></div></section>
 
-  const saveProfile = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!user) return;
+    <section className="glass rounded-2xl p-6 mb-6"><h2 className="font-semibold text-white mb-5">Shipping & Tax</h2><div className="grid sm:grid-cols-2 gap-4">{([['free_shipping_threshold','Free shipping threshold'],['standard_shipping_fee','Standard shipping fee'],['express_shipping_fee','Express shipping fee'],['tax_rate','Tax rate (%)']] as const).map(([key,label]) => <label key={key} className="text-sm text-ink-300">{label}<input type="number" min="0" className="input-field mt-2" value={settings[key] as number} onChange={e => update(key,Number(e.target.value))}/><span className="text-[11px] text-ink-500 mt-1 block">{key === 'tax_rate' ? `${settings[key]}%` : formatNaira(Number(settings[key]))}</span></label>)}</div></section>
 
-    setSavingProfile(true);
-    try {
-      await updateProfile(user.id, {
-        full_name: fullName.trim() || null,
-        phone: phone.trim() || null,
-      });
-      await refreshProfile();
-      toast('Profile updated successfully');
-    } catch (error) {
-      console.error(error);
-      toast('Could not update your profile', 'error');
-    } finally {
-      setSavingProfile(false);
-    }
-  };
+    <section className="glass rounded-2xl p-6 mb-6"><div className="flex items-center gap-3 mb-5"><Bell className="text-gold-400"/><div><h2 className="font-semibold text-white">Admin Notifications</h2><p className="text-xs text-ink-400">These settings control live database notification events.</p></div></div>{([['notify_new_order','New orders','Notify when a new order is created.'],['notify_payment','Successful payments','Notify when a Paystack payment is confirmed.'],['notify_low_stock','Low stock','Notify when stock falls to five or fewer.'],['notify_new_review','New reviews','Notify when a customer submits a review.']] as const).map(([key,title,desc]) => <label key={key} className="flex items-center justify-between gap-4 py-4 border-b border-white/5 cursor-pointer"><div><div className="text-sm text-white font-medium">{title}</div><div className="text-xs text-ink-500 mt-1">{desc}</div></div><input type="checkbox" className="accent-gold-400 w-5 h-5" checked={settings[key]} onChange={e => update(key,e.target.checked)}/></label>)}<label className="flex items-center justify-between gap-4 py-4 cursor-pointer"><div><div className="text-sm text-white font-medium">Maintenance mode</div><div className="text-xs text-ink-500 mt-1">Keep this off unless you intentionally want to disable normal storefront access.</div></div><input type="checkbox" className="accent-gold-400 w-5 h-5" checked={settings.maintenance_mode} onChange={e => update('maintenance_mode',e.target.checked)}/></label></section>
 
-  const toggleSetting = (key: keyof typeof settings) => {
-    if (key === 'theme') return;
-    setSettings((previous) => ({
-      ...previous,
-      [key]: !previous[key],
-    }));
-  };
+    <section className="glass rounded-2xl p-6 mb-6"><div className="flex items-center gap-3 mb-5"><UserPlus className="text-gold-400"/><div><h2 className="font-semibold text-white">Add New Admin</h2><p className="text-xs text-ink-400">Create another administrator without exposing service-role credentials.</p></div></div><div className="grid sm:grid-cols-3 gap-4"><input className="input-field" placeholder="Full name" value={newAdminName} onChange={e=>setNewAdminName(e.target.value)}/><input className="input-field" type="email" placeholder="Email" value={newAdminEmail} onChange={e=>setNewAdminEmail(e.target.value)}/><input className="input-field" type="password" placeholder="Temporary password (8+)" value={newAdminPassword} onChange={e=>setNewAdminPassword(e.target.value)}/></div><button type="button" onClick={() => void addAdmin()} disabled={addingAdmin} className="btn-gold mt-4 rounded-lg px-4 py-2 text-sm disabled:opacity-50">{addingAdmin ? 'Creating…' : 'Create Admin Account'}</button></section>
 
-  const saveSettings = async () => {
-    if (!user) return;
+    <section className="glass rounded-2xl p-6 mb-6"><div className="flex items-center gap-3 mb-5"><Lock className="text-gold-400"/><div><h2 className="font-semibold text-white">Change Password</h2><p className="text-xs text-ink-400">Your current password is verified before the new password is saved.</p></div></div><div className="grid gap-3 max-w-xl"><input className="input-field" type="password" placeholder="Current password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}/><input className="input-field" type="password" placeholder="New password (8+)" value={newPassword} onChange={e=>setNewPassword(e.target.value)}/><input className="input-field" type="password" placeholder="Confirm new password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)}/></div><button type="button" onClick={() => void handlePassword()} disabled={changingPassword} className="btn-gold mt-4 rounded-lg px-4 py-2 text-sm disabled:opacity-50">{changingPassword ? 'Changing…' : 'Change Password'}</button></section>
 
-    setSavingSettings(true);
-    try {
-      await upsertUserSettings(user.id, settings);
-      toast('Preferences saved');
-    } catch (error) {
-      console.error(error);
-      toast('Could not save your preferences', 'error');
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  const changePassword = async (event: React.FormEvent) => {
-    event.preventDefault();
-
-    if (!currentPassword || !newPassword || !confirmPassword) {
-      toast('Complete all password fields', 'error');
-      return;
-    }
-    if (newPassword.length < 8) {
-      toast('New password must be at least 8 characters', 'error');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast('New passwords do not match', 'error');
-      return;
-    }
-
-    setSavingPassword(true);
-    try {
-      if (!user?.email) throw new Error('No email is associated with this account.');
-
-      const { error: verifyError } = await supabase.auth.signInWithPassword({
-        email: user.email,
-        password: currentPassword,
-      });
-      if (verifyError) {
-        throw new Error('Your current password is incorrect.');
-      }
-
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
-      if (error) throw error;
-
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      toast('Password changed successfully');
-    } catch (error) {
-      console.error(error);
-      toast(error instanceof Error ? error.message : 'Could not change password', 'error');
-    } finally {
-      setSavingPassword(false);
-    }
-  };
-
-  const signOutEverywhere = async () => {
-    try {
-      const { error } = await supabase.auth.signOut({ scope: 'global' });
-      if (error) throw error;
-      await signOut();
-    } catch (error) {
-      console.error(error);
-      toast('Could not sign out of all sessions', 'error');
-    }
-  };
-
-  const deleteAccount = async () => {
-    if (!user || deleteConfirm !== 'DELETE') return;
-
-    setDeleting(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('delete-account', {
-        body: { confirmation: 'DELETE' },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || 'Account deletion failed.');
-
-      await supabase.auth.signOut({ scope: 'global' });
-      toast('Your account has been deleted');
-      window.location.href = '/';
-    } catch (error) {
-      console.error(error);
-      toast(error instanceof Error ? error.message : 'Could not delete your account', 'error');
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const preferenceRows: Array<{
-    key: keyof typeof settings;
-    label: string;
-    description: string;
-  }> = [
-    { key: 'order_updates', label: 'Order updates', description: 'Receive updates when your order status changes.' },
-    { key: 'payment_updates', label: 'Payment updates', description: 'Receive payment confirmation and payment status alerts.' },
-    { key: 'shipping_updates', label: 'Shipping updates', description: 'Get notified when your order ships or is delivered.' },
-    { key: 'product_alerts', label: 'Product alerts', description: 'Hear about restocks and new products.' },
-    { key: 'newsletter', label: 'Newsletter', description: 'Receive the Vast Nation newsletter.' },
-    { key: 'promotional_offers', label: 'Promotional offers', description: 'Receive discounts and promotional campaigns.' },
-  ];
-
-  if (loading) {
-    return <div className="glass rounded-2xl p-8 text-center text-ink-400">Loading account settings…</div>;
-  }
-
-  return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-      <div>
-        <h1 className="font-display text-3xl font-bold text-white">Account Settings</h1>
-        <p className="text-ink-400 text-sm mt-2">Manage your profile, notifications, security and account preferences.</p>
-      </div>
-
-      <form onSubmit={saveProfile} className="glass rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <User className="w-5 h-5 text-gold-400" />
-          <div>
-            <h2 className="font-semibold text-white">Profile</h2>
-            <p className="text-xs text-ink-500">Your customer information</p>
-          </div>
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-4">
-          <label className="block">
-            <span className="text-xs text-ink-400">Full name</span>
-            <input className="input-field mt-2" value={fullName} onChange={(e) => setFullName(e.target.value)} />
-          </label>
-          <label className="block">
-            <span className="text-xs text-ink-400">Phone</span>
-            <input className="input-field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          </label>
-          <label className="block md:col-span-2">
-            <span className="text-xs text-ink-400">Email</span>
-            <div className="input-field mt-2 flex items-center gap-2 opacity-70">
-              <Mail className="w-4 h-4" />
-              {user?.email}
-            </div>
-            <p className="text-[11px] text-ink-500 mt-2">Email changes should be handled through Supabase email confirmation.</p>
-          </label>
-        </div>
-
-        <button disabled={savingProfile} className="btn-gold rounded-lg px-5 py-3 mt-5 text-sm">
-          {savingProfile ? 'Saving…' : 'Save Profile'}
-        </button>
-      </form>
-
-      <div className="glass rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <Bell className="w-5 h-5 text-gold-400" />
-          <div>
-            <h2 className="font-semibold text-white">Notifications</h2>
-            <p className="text-xs text-ink-500">Choose what Vast Nation can send you.</p>
-          </div>
-        </div>
-
-        <div className="divide-y divide-white/5">
-          {preferenceRows.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => toggleSetting(item.key)}
-              className="w-full flex items-center justify-between gap-4 py-4 text-left"
-            >
-              <span>
-                <span className="block text-sm text-white">{item.label}</span>
-                <span className="block text-xs text-ink-500 mt-1">{item.description}</span>
-              </span>
-              <span className={`w-11 h-6 rounded-full p-1 transition ${settings[item.key] ? 'bg-gold-400' : 'bg-ink-700'}`}>
-                <span className={`block w-4 h-4 rounded-full bg-white transition ${settings[item.key] ? 'translate-x-5' : ''}`} />
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <button onClick={saveSettings} disabled={savingSettings} className="btn-gold rounded-lg px-5 py-3 mt-5 text-sm">
-          {savingSettings ? 'Saving…' : 'Save Preferences'}
-        </button>
-      </div>
-
-      <form onSubmit={changePassword} className="glass rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <Lock className="w-5 h-5 text-gold-400" />
-          <div>
-            <h2 className="font-semibold text-white">Security</h2>
-            <p className="text-xs text-ink-500">Change your account password.</p>
-          </div>
-        </div>
-        <div className="grid md:grid-cols-3 gap-4">
-          <input className="input-field" type="password" placeholder="Current password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
-          <input className="input-field" type="password" placeholder="New password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-          <input className="input-field" type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-        </div>
-        <button disabled={savingPassword} className="btn-outline rounded-lg px-5 py-3 mt-5 text-sm">
-          {savingPassword ? 'Updating…' : 'Change Password'}
-        </button>
-      </form>
-
-      <div className="glass rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <Shield className="w-5 h-5 text-gold-400" />
-          <div>
-            <h2 className="font-semibold text-white">Sessions</h2>
-            <p className="text-xs text-ink-500">Sign out everywhere if you no longer trust a session.</p>
-          </div>
-        </div>
-        <button type="button" onClick={() => void signOutEverywhere()} className="btn-outline rounded-lg px-5 py-3 text-sm">
-          Sign out of all devices
-        </button>
-      </div>
-
-      <div className="glass rounded-2xl p-6 border border-red-500/20">
-        <div className="flex items-center gap-3 mb-3">
-          <Trash2 className="w-5 h-5 text-red-400" />
-          <h2 className="font-semibold text-white">Delete account</h2>
-        </div>
-        <p className="text-sm text-ink-400 mb-4">This permanently deletes your profile, addresses, orders and account access.</p>
-        {!showDelete ? (
-          <button type="button" onClick={() => setShowDelete(true)} className="text-sm text-red-400 hover:text-red-300">
-            Delete my account
-          </button>
-        ) : (
-          <div className="space-y-3 max-w-md">
-            <p className="text-xs text-ink-500">Type DELETE to confirm.</p>
-            <input className="input-field" value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} />
-            <div className="flex gap-2">
-              <button type="button" onClick={() => { setShowDelete(false); setDeleteConfirm(''); }} className="btn-outline rounded-lg px-4 py-2 text-sm">
-                <X className="w-4 h-4 inline mr-1" /> Cancel
-              </button>
-              <button type="button" disabled={deleteConfirm !== 'DELETE' || deleting} onClick={() => void deleteAccount()} className="rounded-lg px-4 py-2 text-sm bg-red-500/10 text-red-400 border border-red-500/20">
-                <Trash2 className="w-4 h-4 inline mr-1" /> {deleting ? 'Deleting…' : 'Delete permanently'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="glass rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <Moon className="w-5 h-5 text-gold-400" />
-          <div>
-            <h2 className="font-semibold text-white">Theme preference</h2>
-            <p className="text-xs text-ink-500">Saved for future UI theme support.</p>
-          </div>
-        </div>
-        <select
-          className="input-field max-w-xs"
-          value={settings.theme}
-          onChange={(e) => setSettings((p) => ({ ...p, theme: e.target.value as UserSettings['theme'] }))}
-        >
-          <option value="dark">Dark</option>
-          <option value="system">System</option>
-          <option value="light">Light</option>
-        </select>
-      </div>
-    </motion.div>
-  );
+    <section className="glass rounded-2xl p-6 border border-red-500/20"><h2 className="font-semibold text-white mb-4">Account Actions</h2><div className="flex flex-wrap gap-4"><button type="button" onClick={() => void logout()} className="px-4 py-2 rounded-lg bg-white/10 text-white text-sm flex items-center gap-2"><LogOut className="w-4 h-4"/>Log out</button><button type="button" onClick={() => void removeAccount()} className="px-4 py-2 rounded-lg bg-red-500/10 text-red-400 text-sm flex items-center gap-2"><Trash2 className="w-4 h-4"/>Delete my admin account</button></div><p className="text-xs text-ink-500 mt-3">Deleting your account removes your authentication account and profile permanently.</p></section>
+  </div></div>;
 }

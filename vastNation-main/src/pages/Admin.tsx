@@ -42,6 +42,7 @@ import {
   createCategory,
   deleteCategory,
   createCoupon,
+  updateCoupon,
   deleteCoupon,
   updateOrderStatus,
   updateProduct,
@@ -157,6 +158,10 @@ type CouponForm = {
   type: 'percent' | 'fixed';
   value: string;
   min_order: string;
+  usage_limit: string;
+  per_user_limit: string;
+  expires_at: string;
+  active: boolean;
 };
 
 const EMPTY_PRODUCT_FORM: ProductForm = {
@@ -190,6 +195,10 @@ const EMPTY_COUPON_FORM: CouponForm = {
   type: 'percent',
   value: '',
   min_order: '0',
+  usage_limit: '',
+  per_user_limit: '',
+  expires_at: '',
+  active: true,
 };
 
 const PRODUCT_FLAGS: ProductFlag[] = [
@@ -255,6 +264,9 @@ export default function Admin() {
 
   const [editingCategory, setEditingCategory] =
     useState<Category | null>(null);
+
+  const [editingCoupon, setEditingCoupon] =
+    useState<Coupon | null>(null);
 
   const [productForm, setProductForm] =
     useState<ProductForm>({
@@ -1538,109 +1550,37 @@ export default function Admin() {
    * ============================================================
    */
 
-  const handleCreateCoupon =
-    async (
-      e: React.FormEvent,
-    ) => {
-      e.preventDefault();
-
-      const code =
-        couponForm.code
-          .trim()
-          .toUpperCase();
-
-      const value =
-        Number(
-          couponForm.value,
-        );
-
-      const minOrder =
-        Number(
-          couponForm.min_order ||
-            0,
-        );
-
-      if (!code) {
-        toast(
-          'Coupon code is required',
-          'error',
-        );
-        return;
+  const handleSaveCoupon = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const code = couponForm.code.trim().toUpperCase();
+    const value = Number(couponForm.value);
+    const minOrder = Number(couponForm.min_order || 0);
+    const usageLimit = couponForm.usage_limit ? Number(couponForm.usage_limit) : null;
+    const perUserLimit = couponForm.per_user_limit ? Number(couponForm.per_user_limit) : null;
+    if (!code) return toast('Coupon code is required', 'error');
+    if (!Number.isFinite(value) || value <= 0) return toast('Enter a valid coupon value', 'error');
+    if (couponForm.type === 'percent' && value > 100) return toast('Percentage discount cannot exceed 100%', 'error');
+    if (!Number.isFinite(minOrder) || minOrder < 0) return toast('Enter a valid minimum order amount', 'error');
+    if (usageLimit !== null && (!Number.isInteger(usageLimit) || usageLimit <= 0)) return toast('Usage limit must be a positive whole number', 'error');
+    if (perUserLimit !== null && (!Number.isInteger(perUserLimit) || perUserLimit <= 0)) return toast('Per-user limit must be a positive whole number', 'error');
+    try {
+      const payload = { code, type: couponForm.type, value, min_order: minOrder, usage_limit: usageLimit, per_user_limit: perUserLimit, expires_at: couponForm.expires_at ? new Date(couponForm.expires_at).toISOString() : null, active: couponForm.active };
+      if (editingCoupon) {
+        await updateCoupon(editingCoupon.id, payload);
+        toast('Coupon updated successfully', 'success');
+      } else {
+        await createCoupon({ ...payload, usage_count: 0 });
+        toast('Coupon created successfully', 'success');
       }
+      setShowCouponForm(false); setEditingCoupon(null); setCouponForm({ ...EMPTY_COUPON_FORM }); await refreshCoupons();
+    } catch (error) { console.error('Failed to save coupon:', error); toast(error instanceof Error ? error.message : 'Failed to save coupon', 'error'); }
+  };
 
-      if (
-        !Number.isFinite(value) ||
-        value <= 0
-      ) {
-        toast(
-          'Enter a valid coupon value',
-          'error',
-        );
-        return;
-      }
-
-      if (
-        couponForm.type ===
-          'percent' &&
-        value > 100
-      ) {
-        toast(
-          'Percentage discount cannot exceed 100%',
-          'error',
-        );
-        return;
-      }
-
-      if (
-        !Number.isFinite(
-          minOrder,
-        ) ||
-        minOrder < 0
-      ) {
-        toast(
-          'Enter a valid minimum order amount',
-          'error',
-        );
-        return;
-      }
-
-      try {
-        await createCoupon({
-          code,
-          type:
-            couponForm.type,
-          value,
-          min_order:
-            minOrder,
-          active: true,
-          expires_at: null,
-        });
-
-        toast(
-          'Coupon created successfully',
-        );
-
-        setShowCouponForm(
-          false,
-        );
-
-        setCouponForm({
-          ...EMPTY_COUPON_FORM,
-        });
-
-        await refreshCoupons();
-      } catch (error) {
-        console.error(
-          'Failed to create coupon:',
-          error,
-        );
-
-        toast(
-          'Failed to create coupon',
-          'error',
-        );
-      }
-    };
+  const openCouponEditor = (coupon: Coupon) => {
+    setEditingCoupon(coupon);
+    setCouponForm({ code: coupon.code, type: coupon.type, value: String(coupon.value), min_order: String(coupon.min_order ?? 0), usage_limit: coupon.usage_limit == null ? '' : String(coupon.usage_limit), per_user_limit: coupon.per_user_limit == null ? '' : String(coupon.per_user_limit), expires_at: coupon.expires_at ? new Date(coupon.expires_at).toISOString().slice(0,16) : '', active: coupon.active });
+    setShowCouponForm(true);
+  };
 
   const handleDeleteCoupon =
     async (
@@ -3019,17 +2959,10 @@ export default function Admin() {
 
                         <Ticket className="w-6 h-6 text-gold-400" />
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleDeleteCoupon(
-                              coupon.id,
-                            )
-                          }
-                          className="text-ink-500 hover:text-red-400"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => openCouponEditor(coupon)} className="text-ink-500 hover:text-gold-400"><Pencil className="w-4 h-4" /></button>
+                          <button type="button" onClick={() => void handleDeleteCoupon(coupon.id)} className="text-ink-500 hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
+                        </div>
 
                       </div>
 
@@ -3059,6 +2992,11 @@ export default function Admin() {
                               0,
                           ),
                         )}
+                      </p>
+                      <p className="text-xs text-ink-500 mt-2">Used: {coupon.usage_count ?? 0}{coupon.usage_limit ? ` / ${coupon.usage_limit}` : ' / unlimited'}</p>
+                      <p className="text-xs mt-1">
+                        <span className={coupon.active ? 'text-green-400' : 'text-red-400'}>{coupon.active ? 'Active' : 'Inactive'}</span>
+                        {coupon.expires_at && <span className="text-ink-500"> · Expires {formatDate(coupon.expires_at)}</span>}
                       </p>
 
                     </div>
@@ -3658,17 +3596,11 @@ export default function Admin() {
 
       {showCouponForm && (
         <Modal
-          title="Add Coupon"
-          onClose={() =>
-            setShowCouponForm(
-              false,
-            )
-          }
+          title={editingCoupon ? 'Edit Coupon' : 'Add Coupon'}
+          onClose={() => { setShowCouponForm(false); setEditingCoupon(null); setCouponForm({ ...EMPTY_COUPON_FORM }); }}
         >
           <form
-            onSubmit={
-              handleCreateCoupon
-            }
+            onSubmit={handleSaveCoupon}
             className="space-y-4"
           >
 
@@ -3761,11 +3693,18 @@ export default function Admin() {
               className="input-field"
             />
 
+            <div className="grid sm:grid-cols-2 gap-3">
+              <input type="number" min="1" step="1" placeholder="Usage limit (blank = unlimited)" value={couponForm.usage_limit} onChange={(e) => setCouponForm(p => ({ ...p, usage_limit: e.target.value }))} className="input-field" />
+              <input type="number" min="1" step="1" placeholder="Per-user limit (blank = unlimited)" value={couponForm.per_user_limit} onChange={(e) => setCouponForm(p => ({ ...p, per_user_limit: e.target.value }))} className="input-field" />
+            </div>
+            <input type="datetime-local" value={couponForm.expires_at} onChange={(e) => setCouponForm(p => ({ ...p, expires_at: e.target.value }))} className="input-field" />
+            <label className="flex items-center justify-between text-sm text-ink-300"><span>Coupon active</span><input type="checkbox" className="accent-gold-400 w-5 h-5" checked={couponForm.active} onChange={(e) => setCouponForm(p => ({ ...p, active: e.target.checked }))} /></label>
+
             <button
               type="submit"
               className="btn-gold rounded-lg w-full py-3 text-sm uppercase tracking-wider"
             >
-              Create Coupon
+              {editingCoupon ? 'Save Changes' : 'Create Coupon'}
             </button>
 
           </form>

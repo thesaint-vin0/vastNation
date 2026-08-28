@@ -161,7 +161,23 @@ export async function validateCoupon(code: string): Promise<Coupon | null> {
     .eq('active', true)
     .maybeSingle();
   if (error) throw error;
-  return data;
+  if (!data) return null;
+  const coupon = data as Coupon;
+  if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) return null;
+  if (coupon.usage_limit !== null && (coupon.usage_count ?? 0) >= coupon.usage_limit) return null;
+  const { data: session } = await supabase.auth.getSession();
+  const userId = session.session?.user.id;
+  if (userId && coupon.per_user_limit) {
+    const { count, error: countError } = await supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('coupon_code', coupon.code)
+      .eq('payment_status', 'paid');
+    if (countError) throw countError;
+    if ((count ?? 0) >= coupon.per_user_limit) return null;
+  }
+  return coupon;
 }
 
 export async function getCoupons(): Promise<Coupon[]> {
@@ -376,6 +392,11 @@ export async function deleteCategory(id: string): Promise<void> {
 
 export async function createCoupon(coupon: Omit<Coupon, 'id' | 'created_at'>): Promise<void> {
   const { error } = await supabase.from('coupons').insert(coupon);
+  if (error) throw error;
+}
+
+export async function updateCoupon(id: string, updates: Partial<Omit<Coupon, 'id' | 'created_at'>>): Promise<void> {
+  const { error } = await supabase.from('coupons').update(updates).eq('id', id);
   if (error) throw error;
 }
 
