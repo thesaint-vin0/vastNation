@@ -11,7 +11,7 @@ type StoreSettings = {
   currency: string; free_shipping_threshold: number; standard_shipping_fee: number; express_shipping_fee: number;
   tax_rate: number; maintenance_mode: boolean; notify_new_order: boolean; notify_payment: boolean; notify_low_stock: boolean; notify_new_review: boolean;
 };
-const defaults: StoreSettings = { id: '', store_name: 'Vast Nation', store_email: '', store_phone: '', store_address: '', currency: 'NGN', free_shipping_threshold: 100000, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0, maintenance_mode: false, notify_new_order: true, notify_payment: true, notify_low_stock: true, notify_new_review: true };
+const defaults: StoreSettings = { id: '', store_name: 'Vast Nation', store_email: '', store_phone: '', store_address: '', currency: 'NGN', free_shipping_threshold: 100, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0, maintenance_mode: false, notify_new_order: true, notify_payment: true, notify_low_stock: true, notify_new_review: true };
 
 export default function AdminSettings() {
   const { user, profile, loading: authLoading } = useAuth();

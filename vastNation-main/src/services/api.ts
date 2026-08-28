@@ -23,7 +23,7 @@ export async function getStoreSettings(): Promise<StoreSettings> {
   if (error) throw error;
   return (data ?? {
     id: '', store_name: 'Vast Nation', store_email: '', store_phone: '', store_address: '', currency: 'NGN',
-    free_shipping_threshold: 100000, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0,
+    free_shipping_threshold: 100, standard_shipping_fee: 2500, express_shipping_fee: 5000, tax_rate: 0,
     maintenance_mode: false, notify_new_order: true, notify_payment: true, notify_low_stock: true, notify_new_review: true,
   }) as StoreSettings;
 }
