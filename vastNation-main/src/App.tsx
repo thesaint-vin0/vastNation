@@ -57,11 +57,8 @@ export default function App() {
                     <Route path="/contact" element={<Contact />} />
                     <Route path="/about" element={<About />} />
                     <Route path="/wishlist" element={<Wishlist />} />
+                    <Route path="/payment/callback" element={<PaymentCallback />} />
                     <Route path="*" element={<NotFound />} />
-                    <Route
-  path="/payment/callback"
-  element={<PaymentCallback />}
-/>
                   </Route>
                 </Routes>
               </Suspense>

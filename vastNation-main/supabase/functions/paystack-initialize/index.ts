@@ -142,20 +142,33 @@ serve(async (req) => {
      * ==========================================================
      */
 
-    if (!reference) {
-  return new Response(
-    JSON.stringify({
-      error: 'Payment reference is required.',
-    }),
-    {
-      status: 400,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/json',
-      },
-    },
-  );
-}
+    // Generate the reference on the server when the client does not provide one.
+    const paymentReference =
+      reference ||
+      `VN-${orderId}-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+
+    // Prefer the callback supplied by the current website. If it is missing,
+    // derive it from the browser Origin header. This prevents Paystack from
+    // being given an Edge Function/Supabase URL as the customer callback.
+    const origin = req.headers.get('origin');
+    const returnUrl =
+      callback_url ||
+      (origin ? `${origin.replace(/\/$/, '')}/payment/callback` : undefined);
+
+    if (!returnUrl) {
+      return new Response(
+        JSON.stringify({
+          error: 'Payment callback URL could not be determined.',
+        }),
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+    }
 
     /*
      * ==========================================================
@@ -216,7 +229,7 @@ serve(async (req) => {
 
           currency: 'NGN',
 
-          reference,
+          reference: paymentReference,
 
           /*
            * Send customer back to:
@@ -228,7 +241,7 @@ serve(async (req) => {
            * In production this will become your live domain.
            */
 
-          callback_url,
+          callback_url: returnUrl,
 
           /*
            * This allows the webhook to know which
@@ -303,7 +316,7 @@ serve(async (req) => {
 
         reference:
           paystackData.data.reference ||
-          reference,
+          paymentReference,
       }),
       {
         status: 200,

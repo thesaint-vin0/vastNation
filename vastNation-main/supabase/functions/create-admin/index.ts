@@ -1,20 +1,124 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Content-Type': 'application/json',
+};
+
+function json(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: corsHeaders,
+  });
+}
+
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { status: 200, headers: corsHeaders });
+  }
+
+  if (req.method !== 'POST') {
+    return json({ error: 'Method not allowed' }, 405);
+  }
+
   try {
-    const auth = req.headers.get('Authorization');
-    if (!auth) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: {'Content-Type':'application/json'} });
-    const adminClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    const token = auth.replace(/^Bearer\s+/i, '');
-    const { data: callerData } = await adminClient.auth.getUser(token);
-    if (!callerData.user) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: {'Content-Type':'application/json'} });
-    const { data: callerProfile } = await adminClient.from('profiles').select('role').eq('id', callerData.user.id).single();
-    if (callerProfile?.role !== 'admin') return new Response(JSON.stringify({ error: 'Admin access required' }), { status: 403, headers: {'Content-Type':'application/json'} });
-    const { email, password, full_name } = await req.json();
-    if (!email || !password || password.length < 8 || !full_name) return new Response(JSON.stringify({ error: 'Name, email and an 8+ character password are required.' }), { status: 400, headers: {'Content-Type':'application/json'} });
-    const { data, error } = await adminClient.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name } });
-    if (error || !data.user) throw error ?? new Error('Could not create user');
-    const { error: profileError } = await adminClient.from('profiles').upsert({ id: data.user.id, email: data.user.email ?? email, full_name, role: 'admin' }, { onConflict: 'id' });
-    if (profileError) { await adminClient.auth.admin.deleteUser(data.user.id); throw profileError; }
-    return new Response(JSON.stringify({ id: data.user.id, email: data.user.email }), { status: 200, headers: {'Content-Type':'application/json'} });
-  } catch (error) { return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Failed to create admin' }), { status: 500, headers: {'Content-Type':'application/json'} }); }
+    const authorization = req.headers.get('Authorization');
+    if (!authorization) return json({ error: 'Unauthorized' }, 401);
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      return json({ error: 'Supabase server configuration is incomplete.' }, 500);
+    }
+
+    const adminClient = createClient(supabaseUrl, serviceRoleKey);
+    const token = authorization.replace(/^Bearer\s+/i, '');
+
+    const { data: callerData, error: callerError } =
+      await adminClient.auth.getUser(token);
+
+    if (callerError || !callerData.user) {
+      return json({ error: 'Unauthorized' }, 401);
+    }
+
+    const { data: callerProfile, error: profileLookupError } =
+      await adminClient
+        .from('profiles')
+        .select('role')
+        .eq('id', callerData.user.id)
+        .maybeSingle();
+
+    if (profileLookupError) {
+      return json({ error: profileLookupError.message }, 500);
+    }
+
+    if (callerProfile?.role !== 'admin') {
+      return json({ error: 'Admin access required' }, 403);
+    }
+
+    const body = await req.json();
+    const email = String(body.email ?? '').trim().toLowerCase();
+    const password = String(body.password ?? '');
+    const fullName = String(body.full_name ?? '').trim();
+
+    if (!fullName || !email || !password) {
+      return json({ error: 'Name, email and password are required.' }, 400);
+    }
+
+    if (password.length < 8) {
+      return json({ error: 'Password must be at least 8 characters.' }, 400);
+    }
+
+    const { data, error: createError } =
+      await adminClient.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { full_name: fullName },
+      });
+
+    if (createError || !data.user) {
+      return json(
+        { error: createError?.message ?? 'Could not create admin account.' },
+        400,
+      );
+    }
+
+    const { error: profileError } = await adminClient
+      .from('profiles')
+      .upsert(
+        {
+          id: data.user.id,
+          email,
+          full_name: fullName,
+          role: 'admin',
+        },
+        { onConflict: 'id' },
+      );
+
+    if (profileError) {
+      await adminClient.auth.admin.deleteUser(data.user.id);
+      return json({ error: profileError.message }, 400);
+    }
+
+    return json({
+      success: true,
+      id: data.user.id,
+      email,
+    });
+  } catch (error) {
+    console.error('create-admin error:', error);
+    return json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to create admin account.',
+      },
+      500,
+    );
+  }
 });
