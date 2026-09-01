@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Analytics } from '@vercel/analytics/react';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { WishlistProvider } from './context/WishlistContext';
@@ -62,6 +63,7 @@ export default function App() {
                   </Route>
                 </Routes>
               </Suspense>
+              <Analytics />
             </ToastProvider>
           </WishlistProvider>
         </CartProvider>
