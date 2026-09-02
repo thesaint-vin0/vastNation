@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, Check, CheckCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -18,6 +18,7 @@ export default function AdminNotifications() {
   const { user, profile } = useAuth();
   const [items, setItems] = useState<AdminNotification[]>([]);
   const [open, setOpen] = useState(false);
+  const notificationRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     if (!user || profile?.role !== 'admin') return;
@@ -38,6 +39,20 @@ export default function AdminNotifications() {
     return () => { void supabase.removeChannel(channel); };
   }, [user, profile?.role]);
 
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && !notificationRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [open]);
+
   const unread = items.filter((item) => !item.read_at).length;
 
   const markRead = async (id: string) => {
@@ -54,7 +69,7 @@ export default function AdminNotifications() {
   if (profile?.role !== 'admin') return null;
 
   return (
-    <div className="relative shrink-0">
+    <div ref={notificationRef} className="relative shrink-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
