@@ -73,6 +73,7 @@ import {
 
 import { useRealtimeAdmin } from '../hooks/useRealtimeAdmin';
 import AdminNotifications from '../components/AdminNotifications';
+import OrderDocuments from '../components/OrderDocuments';
 
 type Tab =
   | 'dashboard'
@@ -2666,6 +2667,8 @@ export default function Admin() {
                         />
 
                       </div>
+
+                      <OrderDocuments order={order} />
 
                     </div>
                   ),

@@ -488,44 +488,26 @@ if (!order && !orderError) {
       'paystack';
 
     /*
-     * UPDATE THE ORDER
-     *
-     * This is the important part.
+     * Finalize payment and deduct inventory atomically.
+     * The database function locks the order and only deducts stock
+     * on the first transition to paid, so duplicate webhooks are safe.
      */
-    const {
-      error: updateError,
-    } = await supabase
-      .from('orders')
-     .update({
-  payment_status: 'paid',
-  payment_reference: reference,
-  payment_ref: reference,
-  paid_at: new Date().toISOString(),
-  payment_method:
-    verifiedTransaction.channel ?? null,
-  paystack_transaction_id:
-    verifiedTransaction.id ?? null,
-})
-      .eq('id', order.id);
+    const { error: finalizeError } = await supabase.rpc(
+      'finalize_paystack_payment',
+      {
+        p_order_id: order.id,
+        p_reference: reference,
+        p_amount: paidAmount,
+        p_channel: verifiedTransaction.channel ?? 'paystack',
+        p_transaction_id: verifiedTransaction.id ?? null,
+      },
+    );
 
-    if (updateError) {
-      console.error(
-        'Failed to update order:',
-        updateError,
-      );
-
+    if (finalizeError) {
+      console.error('Failed to finalize payment/inventory:', finalizeError);
       return new Response(
-        JSON.stringify({
-          error:
-            'Failed to update order',
-        }),
-        {
-          status: 500,
-          headers: {
-            'Content-Type':
-              'application/json',
-          },
-        },
+        JSON.stringify({ error: 'Failed to finalize payment and inventory' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } },
       );
     }
 
